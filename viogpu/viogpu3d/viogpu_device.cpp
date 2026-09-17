@@ -389,11 +389,16 @@ NTSTATUS VioGpuDevice::Present(_Inout_ DXGKARG_PRESENT *pPresent)
                           m_id,
                           src ? src->GetId() : 0,
                           dst ? dst->GetId() : 0));
+                delete cmd;
+                return stageStatus;
             }
             else if (src && dst &&
-                     src->HasCpuCopyBacking() &&
-                     dst->HasCpuCopyBacking())
+                     ((dxgk_src->SegmentId != 0 && dxgk_dst->SegmentId != 0) ||
+                      (src->HasCpuCopyBacking() && dst->HasCpuCopyBacking())))
             {
+                // Nonzero SegmentId is VidMm's pre-patched residency
+                // contract: Patch may be skipped even if the blob's CPU
+                // mapping has not been established by an earlier Present.
                 NTSTATUS mapStatus = cmd->MapCpuCopyBlt(m_id);
                 if (!NT_SUCCESS(mapStatus) && mapStatus != STATUS_NOT_FOUND)
                 {
@@ -404,6 +409,10 @@ NTSTATUS VioGpuDevice::Present(_Inout_ DXGKARG_PRESENT *pPresent)
                               m_id,
                               src ? src->GetId() : 0,
                               dst ? dst->GetId() : 0));
+                    // A pre-patched Present may bypass Patch entirely.
+                    // Do not accept it unless its CPU mapping is usable.
+                    delete cmd;
+                    return mapStatus;
                 }
             }
             NTSTATUS status = VioGpuEmitPresentNop(pPresent);

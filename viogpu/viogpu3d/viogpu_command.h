@@ -107,6 +107,7 @@ class VioGpuCommand
     BOOLEAN m_cpuCopySrcIo = FALSE;
     BOOLEAN m_cpuCopyDstIo = FALSE;
 
+    void ClearCpuCopyBltMappings();
     void ClearCpuCopyBlt();
 
     VioGpuAllocation **m_allocations;

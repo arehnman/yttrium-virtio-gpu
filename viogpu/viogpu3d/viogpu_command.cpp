@@ -256,7 +256,7 @@ void VioGpuCommand::PrepareSubmit(const DXGKARG_SUBMITCOMMAND *pSubmitCommand)
               pSubmitCommand->DmaBufferSubmissionEndOffset));
 }
 
-void VioGpuCommand::ClearCpuCopyBlt()
+void VioGpuCommand::ClearCpuCopyBltMappings()
 {
     if (m_cpuCopySrc && m_cpuCopySrcVa)
     {
@@ -271,16 +271,21 @@ void VioGpuCommand::ClearCpuCopyBlt()
                                       m_cpuCopyDstIo);
     }
 
-    m_cpuCopyBlt = FALSE;
     m_cpuCopyBltMapped = FALSE;
-    m_cpuCopySrc = NULL;
-    m_cpuCopyDst = NULL;
     m_cpuCopySrcVa = NULL;
     m_cpuCopyDstVa = NULL;
     m_cpuCopySrcMapSize = 0;
     m_cpuCopyDstMapSize = 0;
     m_cpuCopySrcIo = FALSE;
     m_cpuCopyDstIo = FALSE;
+}
+
+void VioGpuCommand::ClearCpuCopyBlt()
+{
+    ClearCpuCopyBltMappings();
+    m_cpuCopyBlt = FALSE;
+    m_cpuCopySrc = NULL;
+    m_cpuCopyDst = NULL;
     m_cpuCopySubRectCnt = 0;
     RtlZeroMemory(&m_cpuCopySrcRect, sizeof(m_cpuCopySrcRect));
     RtlZeroMemory(&m_cpuCopyDstRect, sizeof(m_cpuCopyDstRect));
@@ -367,10 +372,13 @@ NTSTATUS VioGpuCommand::MapCpuCopyBlt(ULONG ctx_id)
         return STATUS_NOT_FOUND;
     }
 
-    if (m_cpuCopyBltMapped)
-    {
-        return STATUS_SUCCESS;
-    }
+    // Present may pre-patch resident allocations, in which case VidMm can
+    // submit without calling Patch. If backing moves before submission,
+    // however, VidMm calls Patch again with the new residency. The old CPU
+    // VA snapshot is not a backing lease: always reacquire it here, even
+    // when Present or an earlier Patch already mapped this command.
+    // Invalidate first so a failed refresh cannot reuse an obsolete VA.
+    ClearCpuCopyBltMappings();
 
     if (!m_cpuCopySrc || !m_cpuCopyDst)
     {
@@ -1210,13 +1218,17 @@ NTSTATUS VioGpuCommander::Patch(const DXGKARG_PATCH *pPatch)
     NTSTATUS status = cmd->MapCpuCopyBlt(ctx_id);
     if (status != STATUS_NOT_FOUND && !NT_SUCCESS(status))
     {
-        DbgPrint(TRACE_LEVEL_WARNING,
-                 ("%s Venus/Yttrium BLT CPU-copy map failed in Patch status=0x%x ctx=%u fence=%u priv=%p\n",
+        DbgPrint(TRACE_LEVEL_ERROR,
+                 ("%s ERROR owner=viogpu3d reason=cpu_blt_mapping_refresh_failed status=0x%x ctx=%u fence=%u priv=%p\n",
                   __FUNCTION__,
                   status,
                   ctx_id,
                   pPatch->SubmissionFenceId,
                   pPatch->pDmaBufferPrivateData));
+        // WDDM treats any Patch failure as fatal (bugcheck 0x119/3).
+        // Fail closed: this is not recoverable error reporting, and success
+        // would retire an invalid CPU BLT as a successful NOP.
+        return status;
     }
 
     return STATUS_SUCCESS;
