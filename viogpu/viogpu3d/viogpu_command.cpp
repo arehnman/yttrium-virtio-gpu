@@ -8,6 +8,7 @@
 #include "viogpu_device.h"
 #include "viogpu_adapter.h"
 #include "baseobj.h"
+#include "virgl_hw.h"
 
 #pragma code_seg(push)
 #pragma code_seg()
@@ -20,12 +21,14 @@ static UINT VioGpuBltBytesPerPixel(UINT format)
     {
         case VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM:
         case VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM:
+        case VIRGL_FORMAT_B8G8R8A8_SRGB:
         case VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM:
         case VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM:
         case VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM:
         case VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM:
         case VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM:
         case VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM:
+        case VIRGL_FORMAT_R8G8B8A8_SRGB:
             return 4;
         default:
             return 4;
@@ -54,12 +57,14 @@ static VIOGPU_BLT_PIXEL_LAYOUT VioGpuBltPixelLayout(UINT format)
     {
         case VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM:
         case VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM:
+        case VIRGL_FORMAT_B8G8R8A8_SRGB:
             return VIOGPU_BLT_LAYOUT_BGRA;
         case VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM:
         case VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM:
             return VIOGPU_BLT_LAYOUT_ARGB;
         case VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM:
         case VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM:
+        case VIRGL_FORMAT_R8G8B8A8_SRGB:
             return VIOGPU_BLT_LAYOUT_RGBA;
         case VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM:
         case VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM:

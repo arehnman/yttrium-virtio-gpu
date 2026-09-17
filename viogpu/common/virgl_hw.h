@@ -18,6 +18,12 @@
 #define VIRGL_BIND_STAGING                  (1u << 19)
 
 #define VIRGL_TARGET_BUFFER                 0
+
+// Virgl formats that do not have corresponding virtio-gpu scanout enum
+// values.  The allocation exchange carries Virgl format numbers.
+#define VIRGL_FORMAT_B8G8R8A8_SRGB          100
+#define VIRGL_FORMAT_R8G8B8A8_SRGB          104
+
 #define VIRGL_BIND_BUFFER_ONLY_MASK         (VIRGL_BIND_VERTEX_BUFFER | \
                                              VIRGL_BIND_INDEX_BUFFER | \
                                              VIRGL_BIND_CONSTANT_BUFFER | \

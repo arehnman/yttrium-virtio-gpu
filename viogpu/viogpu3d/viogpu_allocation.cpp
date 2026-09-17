@@ -146,10 +146,12 @@ UINT VioGpuAllocation::GetStride(void) const
     switch (m_options.format)
     {
         case VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM:
+        case VIRGL_FORMAT_B8G8R8A8_SRGB:
         case VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM:
         case VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM:
         case VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM:
         case VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM:
+        case VIRGL_FORMAT_R8G8B8A8_SRGB:
         case VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM:
         case VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM:
         case VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM:
@@ -616,17 +618,19 @@ void VioGpuAllocation::FlushToScreen(UINT scan_id,
 
 PAGED_CODE_SEG_BEGIN
 
-D3DDDIFORMAT VioGpuToD3DDDIColorFormat(virtio_gpu_formats format)
+D3DDDIFORMAT VioGpuToD3DDDIColorFormat(ULONG format)
 {
     PAGED_CODE();
 
     switch (format)
     {
         case VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM:
+        case VIRGL_FORMAT_B8G8R8A8_SRGB:
             return D3DDDIFMT_A8R8G8B8;
         case VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM:
             return D3DDDIFMT_X8R8G8B8;
         case VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM:
+        case VIRGL_FORMAT_R8G8B8A8_SRGB:
             return D3DDDIFMT_A8B8G8R8;
         case VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM:
             return D3DDDIFMT_X8B8G8R8;
@@ -864,7 +868,7 @@ NTSTATUS VioGpuAllocation::DescribeAllocation(DXGKARG_DESCRIBEALLOCATION *pDescr
     pDescribeAllocation->Height = m_options.height;
     pDescribeAllocation->PrivateDriverFormatAttribute = 0;
 
-    pDescribeAllocation->Format = VioGpuToD3DDDIColorFormat((virtio_gpu_formats)m_options.format);
+    pDescribeAllocation->Format = VioGpuToD3DDDIColorFormat(m_options.format);
 
     // this values are RANDOM
     pDescribeAllocation->MultisampleMethod.NumQualityLevels = 2;

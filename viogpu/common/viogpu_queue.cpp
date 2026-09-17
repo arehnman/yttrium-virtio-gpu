@@ -29,6 +29,7 @@
 
 #include "viogpu_queue.h"
 #include "baseobj.h"
+#include "virgl_hw.h"
 #if !DBG
 #include "viogpu_queue.tmh"
 #endif
@@ -1332,7 +1333,18 @@ void CtrlQueue::SetScanoutBlob(UINT scan_id,
     cmd->r.y = y;
     cmd->width = width;
     cmd->height = height;
-    cmd->format = format;
+    switch (format)
+    {
+        case VIRGL_FORMAT_B8G8R8A8_SRGB:
+            cmd->format = VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM;
+            break;
+        case VIRGL_FORMAT_R8G8B8A8_SRGB:
+            cmd->format = VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM;
+            break;
+        default:
+            cmd->format = format;
+            break;
+    }
     cmd->strides[0] = stride;
     cmd->offsets[0] = offset;
 
