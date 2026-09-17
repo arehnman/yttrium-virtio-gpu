@@ -30,6 +30,7 @@
 #include "viogpu_queue.h"
 #include "baseobj.h"
 #include "virgl_hw.h"
+#include "viogpu_format.h"
 #if !DBG
 #include "viogpu_queue.tmh"
 #endif
@@ -1319,6 +1320,18 @@ void CtrlQueue::SetScanoutBlob(UINT scan_id,
 {
     DbgPrint(TRACE_LEVEL_VERBOSE, ("---> %s scan_id=0x%x res_id=0x%x\n", __FUNCTION__, scan_id, res_id));
 
+    const ULONG scanoutFormat = VioGpuVirglFormatToScanout(format);
+    if (scanoutFormat == 0)
+    {
+        // Entry points reject unsupported formats before accepting a flip.
+        // Reaching this point violates that invariant; do not retire a NOP
+        // as a successful flip through the subsequent resource flush.
+        DbgPrint(TRACE_LEVEL_FATAL,
+                 ("%s invalid accepted blob scanout format=%u scan=%u res=%u\n",
+                  __FUNCTION__, format, scan_id, res_id));
+        BugCheckCtrlQueueSubmitFailure(NULL, static_cast<UINT>(STATUS_NOT_SUPPORTED));
+    }
+
     PGPU_SET_SCANOUT_BLOB cmd;
     PGPU_VBUFFER vbuf;
     cmd = (PGPU_SET_SCANOUT_BLOB)AllocCmd(&vbuf, sizeof(*cmd));
@@ -1333,18 +1346,7 @@ void CtrlQueue::SetScanoutBlob(UINT scan_id,
     cmd->r.y = y;
     cmd->width = width;
     cmd->height = height;
-    switch (format)
-    {
-        case VIRGL_FORMAT_B8G8R8A8_SRGB:
-            cmd->format = VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM;
-            break;
-        case VIRGL_FORMAT_R8G8B8A8_SRGB:
-            cmd->format = VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM;
-            break;
-        default:
-            cmd->format = format;
-            break;
-    }
+    cmd->format = scanoutFormat;
     cmd->strides[0] = stride;
     cmd->offsets[0] = offset;
 

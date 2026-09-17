@@ -11,6 +11,7 @@
 #include "viogpu_adapter.h"
 #include "viogpu_device.h"
 #include "virgl_hw.h"
+#include "viogpu_format.h"
 
 extern "C" NTSYSAPI VOID NTAPI KeAttachProcess(_Inout_ PRKPROCESS Process);
 extern "C" NTSYSAPI VOID NTAPI KeDetachProcess(VOID);
@@ -145,16 +146,16 @@ UINT VioGpuAllocation::GetStride(void) const
 
     switch (m_options.format)
     {
-        case VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM:
+        case VIRGL_FORMAT_B8G8R8A8_UNORM:
         case VIRGL_FORMAT_B8G8R8A8_SRGB:
-        case VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM:
-        case VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM:
-        case VIRTIO_GPU_FORMAT_X8R8G8B8_UNORM:
-        case VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM:
+        case VIRGL_FORMAT_B8G8R8X8_UNORM:
+        case VIRGL_FORMAT_A8R8G8B8_UNORM:
+        case VIRGL_FORMAT_X8R8G8B8_UNORM:
+        case VIRGL_FORMAT_R8G8B8A8_UNORM:
         case VIRGL_FORMAT_R8G8B8A8_SRGB:
-        case VIRTIO_GPU_FORMAT_X8B8G8R8_UNORM:
-        case VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM:
-        case VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM:
+        case VIRGL_FORMAT_X8B8G8R8_UNORM:
+        case VIRGL_FORMAT_A8B8G8R8_UNORM:
+        case VIRGL_FORMAT_R8G8B8X8_UNORM:
             return m_options.width * 4;
         default:
             DbgPrint(TRACE_LEVEL_WARNING,
@@ -618,21 +619,42 @@ void VioGpuAllocation::FlushToScreen(UINT scan_id,
 
 PAGED_CODE_SEG_BEGIN
 
+static ULONG VioGpuD3DDDIToVirglColorFormat(D3DDDIFORMAT format)
+{
+    PAGED_CODE();
+
+    switch (format)
+    {
+        case D3DDDIFMT_A8R8G8B8:
+            return VIRGL_FORMAT_B8G8R8A8_UNORM;
+        case D3DDDIFMT_X8R8G8B8:
+            return VIRGL_FORMAT_B8G8R8X8_UNORM;
+        case D3DDDIFMT_A8B8G8R8:
+            return VIRGL_FORMAT_R8G8B8A8_UNORM;
+        case D3DDDIFMT_X8B8G8R8:
+            return VIRGL_FORMAT_R8G8B8X8_UNORM;
+    }
+    DbgPrint(TRACE_LEVEL_ERROR,
+             ("%s ERROR owner=viogpu3d component=standard-allocation reason=unsupported_d3dddi_format format=%u action=reject\n",
+              __FUNCTION__, format));
+    return 0;
+}
+
 D3DDDIFORMAT VioGpuToD3DDDIColorFormat(ULONG format)
 {
     PAGED_CODE();
 
     switch (format)
     {
-        case VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM:
+        case VIRGL_FORMAT_B8G8R8A8_UNORM:
         case VIRGL_FORMAT_B8G8R8A8_SRGB:
             return D3DDDIFMT_A8R8G8B8;
-        case VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM:
+        case VIRGL_FORMAT_B8G8R8X8_UNORM:
             return D3DDDIFMT_X8R8G8B8;
-        case VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM:
+        case VIRGL_FORMAT_R8G8B8A8_UNORM:
         case VIRGL_FORMAT_R8G8B8A8_SRGB:
             return D3DDDIFMT_A8B8G8R8;
-        case VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM:
+        case VIRGL_FORMAT_R8G8B8X8_UNORM:
             return D3DDDIFMT_X8B8G8R8;
     }
     DbgPrint(TRACE_LEVEL_ERROR, ("---> %s Unsupported color format %d\n", __FUNCTION__, format));
@@ -654,7 +676,7 @@ NTSTATUS VioGpuAllocation::GetStandardAllocationDriverData(DXGKARG_GETSTANDARDAL
     VIOGPU_CREATE_ALLOCATION_EXCHANGE *allocationExchange = (VIOGPU_CREATE_ALLOCATION_EXCHANGE *)pStandardAllocation->pAllocationPrivateDriverData;
 
     allocationExchange->ResourceOptions.target = 2;
-    allocationExchange->ResourceOptions.format = VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM;
+    allocationExchange->ResourceOptions.format = VIRGL_FORMAT_R8G8B8X8_UNORM;
     allocationExchange->ResourceOptions.bind = VIRGL_BIND_RENDER_TARGET | VIRGL_BIND_SAMPLER_VIEW |
                                                VIRGL_BIND_DISPLAY_TARGET | VIRGL_BIND_SCANOUT;
 
@@ -684,7 +706,12 @@ NTSTATUS VioGpuAllocation::GetStandardAllocationDriverData(DXGKARG_GETSTANDARDAL
 
                 allocationExchange->ResourceOptions.width = surfaceData->Width;
                 allocationExchange->ResourceOptions.height = surfaceData->Height;
-                allocationExchange->ResourceOptions.format = ColorFormat(surfaceData->Format);
+                allocationExchange->ResourceOptions.format =
+                    VioGpuD3DDDIToVirglColorFormat(surfaceData->Format);
+                if (!allocationExchange->ResourceOptions.format)
+                {
+                    return STATUS_NOT_SUPPORTED;
+                }
                 allocationExchange->Stride = surfaceData->Width * 4;
                 allocationExchange->Size = (ULONGLONG)surfaceData->Width * (ULONGLONG)surfaceData->Height * 4;
 
@@ -706,7 +733,12 @@ NTSTATUS VioGpuAllocation::GetStandardAllocationDriverData(DXGKARG_GETSTANDARDAL
 
                 allocationExchange->ResourceOptions.width = surfaceData->Width;
                 allocationExchange->ResourceOptions.height = surfaceData->Height;
-                allocationExchange->ResourceOptions.format = ColorFormat(surfaceData->Format);
+                allocationExchange->ResourceOptions.format =
+                    VioGpuD3DDDIToVirglColorFormat(surfaceData->Format);
+                if (!allocationExchange->ResourceOptions.format)
+                {
+                    return STATUS_NOT_SUPPORTED;
+                }
                 allocationExchange->Stride = surfaceData->Width * 4;
                 allocationExchange->Size = (ULONGLONG)surfaceData->Width * (ULONGLONG)surfaceData->Height * 4;
 
@@ -731,7 +763,7 @@ NTSTATUS VioGpuAllocation::GetStandardAllocationDriverData(DXGKARG_GETSTANDARDAL
 
                 allocationExchange->ResourceOptions.width = surfaceData->Width;
                 allocationExchange->ResourceOptions.height = surfaceData->Height;
-                allocationExchange->ResourceOptions.format = VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM;
+                allocationExchange->ResourceOptions.format = VIRGL_FORMAT_B8G8R8X8_UNORM;
                 allocationExchange->Stride = surfaceData->Width * 4;
                 allocationExchange->Size = (ULONGLONG)surfaceData->Width * (ULONGLONG)surfaceData->Height * 4;
 
@@ -958,6 +990,14 @@ NTSTATUS VioGpuAllocation::EscapeResourceSetScanoutBlob(VIOGPU_RES_SET_SCANOUT_B
     {
         return STATUS_NOT_SUPPORTED;
     }
+    const ULONG format = resScanout->Format ? resScanout->Format : m_options.format;
+    if (!VioGpuVirglFormatToScanout(format))
+    {
+        DbgPrint(TRACE_LEVEL_ERROR,
+                 ("%s ERROR owner=viogpu3d component=blob-scanout reason=unsupported_virgl_format res_id=0x%x format=%u action=reject\n",
+                  __FUNCTION__, m_Id, format));
+        return STATUS_NOT_SUPPORTED;
+    }
     WaitForPendingBlobCreate();
     if (!m_blob_created)
     {
@@ -972,7 +1012,7 @@ NTSTATUS VioGpuAllocation::EscapeResourceSetScanoutBlob(VIOGPU_RES_SET_SCANOUT_B
                   resScanout->Height,
                   resScanout->X,
                   resScanout->Y,
-                  resScanout->Format,
+                  format,
                   resScanout->Stride,
                   resScanout->Offset);
     return STATUS_SUCCESS;

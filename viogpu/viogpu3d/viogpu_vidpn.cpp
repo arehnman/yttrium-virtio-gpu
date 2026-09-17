@@ -6,6 +6,7 @@
 
 #include "viogpu_vidpn.h"
 #include "viogpu_adapter.h"
+#include "viogpu_format.h"
 #include "bitops.h"
 #include "baseobj.h"
 #include "edid.h"
@@ -2136,8 +2137,19 @@ void VioGpuVidPN::VsyncNotifyTimerDpc(KDPC *dpc, PVOID deferredContext, PVOID sy
 
 NTSTATUS VioGpuVidPN::SetVidPnSourceAddress(const DXGKARG_SETVIDPNSOURCEADDRESS *pSetVidPnSourceAddress)
 {
+    VioGpuAllocation *sourceRes =
+        reinterpret_cast<VioGpuAllocation *>(pSetVidPnSourceAddress->hAllocation);
+    if (sourceRes && sourceRes->IsBlob() &&
+        !VioGpuVirglFormatToScanout(sourceRes->GetFormat()))
+    {
+        DbgPrint(TRACE_LEVEL_ERROR,
+                 ("%s ERROR owner=viogpu3d component=SetVidPnSourceAddress reason=unsupported_blob_scanout_format action=reject format=%u res_id=0x%x\n",
+                  __FUNCTION__, sourceRes->GetFormat(), sourceRes->GetId()));
+        return STATUS_NOT_SUPPORTED;
+    }
+
     m_sourceAddress = pSetVidPnSourceAddress->PrimaryAddress;
-    m_sourceRes = reinterpret_cast<VioGpuAllocation *>(pSetVidPnSourceAddress->hAllocation);
+    m_sourceRes = sourceRes;
     if (!QueueSourceAddress(m_sourceAddress))
     {
         LONG fullCount = InterlockedIncrement(&m_sourceQueueFullCount);

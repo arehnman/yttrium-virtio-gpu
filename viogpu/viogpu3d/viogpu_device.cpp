@@ -6,6 +6,7 @@
 
 #include "viogpu_device.h"
 #include "viogpu_adapter.h"
+#include "viogpu_format.h"
 #include "baseobj.h"
 #include "virgl_hw.h"
 
@@ -248,6 +249,14 @@ NTSTATUS VioGpuDevice::Present(_Inout_ DXGKARG_PRESENT *pPresent)
             if (!src)
             {
                 return STATUS_INVALID_PARAMETER;
+            }
+
+            if (src->IsBlob() && !VioGpuVirglFormatToScanout(src->GetFormat()))
+            {
+                DbgPrint(TRACE_LEVEL_ERROR,
+                         ("%s ERROR owner=viogpu3d component=Present reason=unsupported_blob_scanout_format action=reject format=%u res_id=0x%x\n",
+                          __FUNCTION__, src->GetFormat(), src->GetId()));
+                return STATUS_NOT_SUPPORTED;
             }
 
             VioGpuCommand *cmd = new (NonPagedPoolNx) VioGpuCommand(m_pAdapter);
@@ -528,6 +537,25 @@ NTSTATUS VioGpuDevice::Render(DXGKARG_RENDER *pRender)
             }
 
             memcpy(dmaBuf, cmdBuf, commandBytes);
+            // Use the header snapshot that bounded this copy. The user-mode
+            // header may have changed while the command body was copied.
+            memcpy(dmaBuf, &cmdHdr, sizeof(cmdHdr));
+            if (cmdHdr.type == VIOGPU_CMD_PRESENT_FLIP)
+            {
+                if (cmdHdr.size < sizeof(VIOGPU_PRESENT_FLIP_CMD))
+                {
+                    return STATUS_INVALID_USER_BUFFER;
+                }
+                const VIOGPU_PRESENT_FLIP_CMD *flipCmd =
+                    reinterpret_cast<const VIOGPU_PRESENT_FLIP_CMD *>(dmaBuf + sizeof(cmdHdr));
+                if (flipCmd->is_blob && !VioGpuVirglFormatToScanout(flipCmd->format))
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("%s ERROR owner=viogpu3d component=Render reason=unsupported_blob_scanout_format action=reject format=%u res_id=0x%x\n",
+                              __FUNCTION__, flipCmd->format, flipCmd->res_id));
+                    return STATUS_NOT_SUPPORTED;
+                }
+            }
             dmaBuf += commandBytes;
             cmdBuf += commandBytes;
             dmaBytesLeft -= commandBytes;

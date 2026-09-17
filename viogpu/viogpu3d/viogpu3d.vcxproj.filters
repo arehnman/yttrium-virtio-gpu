@@ -102,6 +102,9 @@
     <ClInclude Include="..\common\virgl_hw.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\common\viogpu_format.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="viogpu3d.rc">

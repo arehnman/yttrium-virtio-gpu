@@ -19,10 +19,18 @@
 
 #define VIRGL_TARGET_BUFFER                 0
 
-// Virgl formats that do not have corresponding virtio-gpu scanout enum
-// values.  The allocation exchange carries Virgl format numbers.
+// Formats supported by the scanout conversion.  The allocation exchange
+// carries Virgl format numbers, not virtio-gpu scanout enum values.
+#define VIRGL_FORMAT_B8G8R8A8_UNORM           1
+#define VIRGL_FORMAT_B8G8R8X8_UNORM           2
+#define VIRGL_FORMAT_A8R8G8B8_UNORM           3
+#define VIRGL_FORMAT_X8R8G8B8_UNORM           4
+#define VIRGL_FORMAT_R8G8B8A8_UNORM          67
+#define VIRGL_FORMAT_X8B8G8R8_UNORM          68
 #define VIRGL_FORMAT_B8G8R8A8_SRGB          100
 #define VIRGL_FORMAT_R8G8B8A8_SRGB          104
+#define VIRGL_FORMAT_A8B8G8R8_UNORM         121
+#define VIRGL_FORMAT_R8G8B8X8_UNORM         134
 
 #define VIRGL_BIND_BUFFER_ONLY_MASK         (VIRGL_BIND_VERTEX_BUFFER | \
                                              VIRGL_BIND_INDEX_BUFFER | \
