@@ -907,7 +907,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                  *
                  * The segments are the same ones QUERYSEGMENT3 reports; only
                  * the shape of the answer differs.  Descriptors are addressed
-                 * by a stride the driver chooses rather than as a typed array,
+                 * by the caller's stride rather than as a typed array,
                  * so that the structure can grow without breaking callers.
                  */
                 if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGK_QUERYSEGMENTOUT4))
@@ -930,26 +930,35 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 const UINT segment_count =
                     base_segment_count + (m_pPageTableSegment ? 1 : 0);
 
-                if (!pSegmentInfo->pSegmentDescriptor)
+                if (pSegmentInfo->NbSegment == 0)
                 {
-                    /* Counting pass: say how many and how wide.  Log what the
-                     * caller brought in first - dxgkrnl came back with a
-                     * stride of its own last time, wider than this struct. */
-                    DbgPrint(TRACE_LEVEL_ERROR,
-                             ("%s counting pass: caller stride %u, NbSegment %u, output %u bytes\n",
-                              __FUNCTION__, (UINT)pSegmentInfo->SegmentDescriptorStride,
-                              pSegmentInfo->NbSegment, pQueryAdapterInfo->OutputDataSize));
+                    /* Only NbSegment is valid on the counting pass. */
                     pSegmentInfo->NbSegment = segment_count;
-                    pSegmentInfo->SegmentDescriptorStride = sizeof(DXGK_SEGMENTDESCRIPTOR4);
-                    DbgPrint(TRACE_LEVEL_ERROR,
-                             ("%s reporting %u segments, stride %u\n",
-                              __FUNCTION__, segment_count,
-                              (UINT)sizeof(DXGK_SEGMENTDESCRIPTOR4)));
                     return STATUS_SUCCESS;
                 }
 
-                const SIZE_T stride = pSegmentInfo->SegmentDescriptorStride ?
-                    pSegmentInfo->SegmentDescriptorStride : sizeof(DXGK_SEGMENTDESCRIPTOR4);
+                if (pSegmentInfo->NbSegment != segment_count || !pSegmentInfo->pSegmentDescriptor)
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("%s QUERYSEGMENT4 invalid fill buffer: count %u, expected %u, descriptors %p\n",
+                              __FUNCTION__, pSegmentInfo->NbSegment, segment_count,
+                              pSegmentInfo->pSegmentDescriptor));
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                /* Require the WDDM 2.0 fields, independent of newer fields
+                 * appended to the descriptor in the build's WDK. */
+                const SIZE_T required_descriptor_size =
+                    FIELD_OFFSET(DXGK_SEGMENTDESCRIPTOR4, VprReserveSize) + sizeof(UINT);
+                const SIZE_T stride = pSegmentInfo->SegmentDescriptorStride;
+                if (stride < required_descriptor_size || stride > MAXSIZE_T / segment_count)
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("%s QUERYSEGMENT4 invalid descriptor stride %Iu: minimum %Iu, count %u\n",
+                              __FUNCTION__, stride, required_descriptor_size, segment_count));
+                    return STATUS_INVALID_PARAMETER;
+                }
+
                 BYTE *pDescBytes = pSegmentInfo->pSegmentDescriptor;
 
                 RtlZeroMemory(pDescBytes, stride * segment_count);

@@ -175,28 +175,16 @@ extern "C" NTSTATUS DriverEntry(_In_ DRIVER_OBJECT *pDriverObject, _In_ UNICODE_
     InitialData.DxgkDdiDestroyProcess = VioGpu3DDdiDestroyProcess;
     InitialData.DxgkDdiSubmitCommandVirtual = VioGpu3DDdiSubmitCommandVirtual;
 
-    /*
-     * The rest of what WDDM 2.0 adds to this structure.  With every adapter
-     * query answered the adapter is still declined for render, and it is
-     * declined before a single WDDM 2.0 entry point is called - which is what
-     * dxgkrnl validating this table for missing entries would look like.
-     *
-     * One shared stub stands in for all of them, cast into each slot: the
-     * Microsoft x64 convention is caller-cleanup, so a callee that ignores its
-     * arguments and returns in RAX is harmless whether the caller expected
-     * void or an NTSTATUS.  If the theory is right the adapter starts and none
-     * of these is ever entered; if one is entered, the log says so and it gets
-     * a real implementation then.
-     */
-    InitialData.DxgkDdiRenderGdi = (PDXGKDDI_RENDERGDI)VioGpu3DDdiWddm2Stub;
+    // Keep each callback's exact DDI signature, including on x86.
+    InitialData.DxgkDdiRenderGdi = VioGpu3DDdiRenderGdi;
     /* Required at DDI 0x5008 and above; a null here fails the whole adapter
      * with STATUS_INVALID_PARAMETER and watchdog error 1DD6. */
     InitialData.DxgkDdiCalibrateGpuClock = VioGpu3DDdiCalibrateGpuClock;
     InitialData.DxgkDdiSetRootPageTable = VioGpu3DDdiSetRootPageTable;
     InitialData.DxgkDdiGetRootPageTableSize = VioGpu3DDdiGetRootPageTableSize;
-    InitialData.DxgkDdiMapCpuHostAperture = (PDXGKDDI_MAPCPUHOSTAPERTURE)VioGpu3DDdiWddm2Stub;
-    InitialData.DxgkDdiUnmapCpuHostAperture = (PDXGKDDI_UNMAPCPUHOSTAPERTURE)VioGpu3DDdiWddm2Stub;
-    InitialData.DxgkDdiSetStablePowerState = (PDXGKDDI_SETSTABLEPOWERSTATE)VioGpu3DDdiWddm2Stub;
+    InitialData.DxgkDdiMapCpuHostAperture = VioGpu3DDdiMapCpuHostAperture;
+    InitialData.DxgkDdiUnmapCpuHostAperture = VioGpu3DDdiUnmapCpuHostAperture;
+    InitialData.DxgkDdiSetStablePowerState = VioGpu3DDdiSetStablePowerState;
 #endif
     InitialData.DxgkDdiControlInterrupt = VioGpu3DDdiControlInterrupt;
     InitialData.DxgkDdiGetScanLine = VioGpu3DDdiGetScanLine;
@@ -397,28 +385,53 @@ VioGpu3DQueryAdapterInfo(_In_ CONST HANDLE hAdapter, _In_ CONST DXGKARG_QUERYADA
 }
 
 #if VIOGPU_WDDM2
-/*
- * WDDM 2.0 entry points, present so that dxgkrnl has something to call.
- *
- * Declaring WDDM 2.0 and the addressing capabilities is not enough on its own:
- * D3DKMTCreatePagingQueue still fails with STATUS_NOT_IMPLEMENTED, which says
- * dxgkrnl wants the entry points themselves.  Whether it calls these, and in
- * what order, is what they exist to find out - each one says so and succeeds,
- * so the first thing that genuinely cannot work shows up as a different
- * failure rather than hiding behind this one.
- *
- * None of these do anything yet.  That is deliberate: a paravirtual device
- * with no VRAM has nothing to page and no page tables to own, so the question
- * is how much of the model dxgkrnl insists on rather than how much of it this
- * device needs.
- */
+// These entry points remain unsupported. Use separate, correctly typed
+// callbacks so their names identify the missing operation in diagnostics.
 
 NTSTATUS
 APIENTRY
-VioGpu3DDdiWddm2Stub(void)
+VioGpu3DDdiRenderGdi(_In_ CONST HANDLE hContext, _Inout_ DXGKARG_RENDERGDI *pRenderGdi)
 {
-    DbgPrint(TRACE_LEVEL_ERROR, ("<---> %s\n", __FUNCTION__));
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(hContext);
+    UNREFERENCED_PARAMETER(pRenderGdi);
+    DbgPrint(TRACE_LEVEL_ERROR, ("%s unsupported operation owner=viogpu3d\n", __FUNCTION__));
     return STATUS_NOT_IMPLEMENTED;
+}
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiMapCpuHostAperture(_In_ CONST HANDLE hAdapter,
+                            _In_ CONST DXGKARG_MAPCPUHOSTAPERTURE *pArgs)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(pArgs);
+    DbgPrint(TRACE_LEVEL_ERROR, ("%s unsupported operation owner=viogpu3d\n", __FUNCTION__));
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiUnmapCpuHostAperture(_In_ CONST HANDLE hAdapter,
+                              _In_ CONST DXGKARG_UNMAPCPUHOSTAPERTURE *pArgs)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(pArgs);
+    DbgPrint(TRACE_LEVEL_ERROR, ("%s unsupported operation owner=viogpu3d\n", __FUNCTION__));
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+VOID
+APIENTRY
+VioGpu3DDdiSetStablePowerState(_In_ CONST HANDLE hAdapter,
+                             _In_ CONST DXGKARG_SETSTABLEPOWERSTATE *pArgs)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(pArgs);
+    DbgPrint(TRACE_LEVEL_ERROR, ("%s unsupported operation owner=viogpu3d\n", __FUNCTION__));
 }
 
 /*
@@ -999,6 +1012,23 @@ VioGpu3DDdiCreateContext(_In_ CONST HANDLE hDevice, _Inout_ DXGKARG_CREATECONTEX
     PAGED_CODE();
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<---> %s\n", __FUNCTION__));
+
+#if VIOGPU_WDDM2
+    /* The current UMD uses physical submissions. Reject incompatible virtual
+     * contexts before they can reach SubmitCommandVirtual or RenderGdi.
+     * Preserve VidMm's system paging context: CPU_VIRTUAL page-table updates
+     * are performed immediately and the supported paging operations emit no
+     * DMA commands. Virtual submission and fence completion still need a
+     * real implementation before accepting application virtual contexts. */
+    if (pCreateContext->Flags.VirtualAddressing && !pCreateContext->Flags.SystemContext)
+    {
+        DbgPrint(TRACE_LEVEL_ERROR,
+                 ("%s rejected virtual context owner=viogpu3d node=%u flags=0x%x "
+                  "reason=virtual submission is not implemented\n",
+                  __FUNCTION__, pCreateContext->NodeOrdinal, pCreateContext->Flags.Value));
+        return STATUS_GRAPHICS_DRIVER_MISMATCH;
+    }
+#endif
 
     // We currently don't have sepraration between context and device
     pCreateContext->hContext = hDevice;
