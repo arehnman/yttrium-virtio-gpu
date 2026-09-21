@@ -664,7 +664,7 @@ D3DDDIFORMAT VioGpuToD3DDDIColorFormat(ULONG format)
 NTSTATUS VioGpuAllocation::GetStandardAllocationDriverData(DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA *pStandardAllocation)
 {
     PAGED_CODE();
-    DbgPrint(TRACE_LEVEL_ERROR, ("---> %s type=%d\n", __FUNCTION__, pStandardAllocation->StandardAllocationType));
+    DbgPrint(TRACE_LEVEL_VERBOSE, ("---> %s type=%d\n", __FUNCTION__, pStandardAllocation->StandardAllocationType));
 
     if (!pStandardAllocation->pResourcePrivateDriverData && !pStandardAllocation->pAllocationPrivateDriverData)
     {
@@ -715,7 +715,7 @@ NTSTATUS VioGpuAllocation::GetStandardAllocationDriverData(DXGKARG_GETSTANDARDAL
                 allocationExchange->Stride = surfaceData->Width * 4;
                 allocationExchange->Size = (ULONGLONG)surfaceData->Width * (ULONGLONG)surfaceData->Height * 4;
 
-                DbgPrint(TRACE_LEVEL_ERROR,
+                DbgPrint(TRACE_LEVEL_INFORMATION,
                          ("<--- %s shared primary surface: width=%d, height=%d, format=%d\n",
                           __FUNCTION__,
                           surfaceData->Width,
@@ -745,7 +745,7 @@ NTSTATUS VioGpuAllocation::GetStandardAllocationDriverData(DXGKARG_GETSTANDARDAL
                 allocationExchange->ResourceOptions.flags |= VIRGL_RESOURCE_FLAG_MAP_COHERENT;
 
                 surfaceData->Pitch = surfaceData->Width * 4;
-                DbgPrint(TRACE_LEVEL_ERROR,
+                DbgPrint(TRACE_LEVEL_INFORMATION,
                          ("<--- %s shadow surface: width=%d, height=%d, format=%d\n",
                           __FUNCTION__,
                           surfaceData->Width,
@@ -770,7 +770,7 @@ NTSTATUS VioGpuAllocation::GetStandardAllocationDriverData(DXGKARG_GETSTANDARDAL
                 allocationExchange->ResourceOptions.flags |= VIRGL_RESOURCE_FLAG_MAP_COHERENT;
 
                 surfaceData->Pitch = surfaceData->Width * 4;
-                DbgPrint(TRACE_LEVEL_ERROR, ("<--- %s staging surface\n", __FUNCTION__));
+                DbgPrint(TRACE_LEVEL_INFORMATION, ("<--- %s staging surface\n", __FUNCTION__));
                 return STATUS_SUCCESS;
             }
 
@@ -886,11 +886,7 @@ NTSTATUS VioGpuAllocation::DxgkCreateAllocation(VioGpuAdapter *adapter, DXGKARG_
         allocationInfo->EvictionSegmentSet = 0;
     }
 
-    /* WARNING level so this is visible at the default nDebugLevel: the WDDM
-     * 2.0 boot failure turns on whether this runs at all before
-     * VioGpuDevice::OpenAllocation looks an allocation up and fails, and at
-     * INFORMATION it cannot be seen. */
-    DbgPrint(TRACE_LEVEL_WARNING,
+    DbgPrint(TRACE_LEVEL_INFORMATION,
              ("<--- %s res_id=0x%x size=%d driver_handle=%p flags=0x%x num=%u adapter=%p\n",
               __FUNCTION__, allocation->GetId(), allocationInfo->Size,
               allocation, pCreateAllocation->Flags.Value,

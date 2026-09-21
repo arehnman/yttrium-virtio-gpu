@@ -610,20 +610,14 @@ NTSTATUS VioGpuDevice::Render(DXGKARG_RENDER *pRender)
 NTSTATUS VioGpuDevice::OpenAllocation(_In_ CONST DXGKARG_OPENALLOCATION *pOpenAllocation)
 {
     PAGED_CODE();
-    /* WARNING level so the ordering against DxgkCreateAllocation is visible
-     * at the default nDebugLevel.  The adapter pointer is logged on both
-     * sides because the boot retries adapter start several times, and a
-     * device left holding a superseded adapter would make this lookup go
-     * through a dead DXGKRNL_INTERFACE - which is what a NULL from
-     * DxgkCbGetHandleData would look like. */
-    DbgPrint(TRACE_LEVEL_WARNING,
+    DbgPrint(TRACE_LEVEL_VERBOSE,
              ("---> %s num=%u device=%p adapter=%p\n",
               __FUNCTION__, pOpenAllocation->NumAllocations, this, m_pAdapter));
 
     for (UINT k = 0; k < pOpenAllocation->NumAllocations; k++)
     {
         const DXGK_OPENALLOCATIONINFO *info = &pOpenAllocation->pOpenAllocation[k];
-        DbgPrint(TRACE_LEVEL_WARNING,
+        DbgPrint(TRACE_LEVEL_VERBOSE,
                  ("     %s [%u] hAllocation=%p privData=%p privSize=%u\n",
                   __FUNCTION__, k, info->hAllocation,
                   info->pPrivateDriverData, info->PrivateDriverDataSize));

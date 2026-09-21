@@ -303,7 +303,7 @@ NTSTATUS VioGpuAdapter::AllocatePageTableSegment(void)
     const bool bHasShmem = pShmemBar && m_VioDev.shmem_len;
     m_PageTableSegmentId = (bHasShmem ? 2 : 1) + 1;
 
-    DbgPrint(TRACE_LEVEL_ERROR,
+    DbgPrint(TRACE_LEVEL_INFORMATION,
              ("%s reserved %u bytes for page tables at physical %I64x\n",
               __FUNCTION__, (UINT)m_PageTableSegmentSize, m_PageTableSegmentPA.QuadPart));
 

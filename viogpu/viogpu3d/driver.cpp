@@ -453,7 +453,7 @@ VioGpu3DDdiGetRootPageTableSize(_In_ CONST HANDLE hAdapter,
 
     pArgs->NumberOfPte = Pages * PtesPerPage;
 
-    DbgPrint(TRACE_LEVEL_ERROR,
+    DbgPrint(TRACE_LEVEL_VERBOSE,
              ("<---> %s: adapter %u, %u entries in %u bytes\n", __FUNCTION__,
               pArgs->PhysicalAdapterIndex, pArgs->NumberOfPte, Pages * PAGE_SIZE));
 
@@ -479,7 +479,7 @@ VioGpu3DDdiSetRootPageTable(_In_ CONST HANDLE hAdapter,
         return;
     }
 
-    DbgPrint(TRACE_LEVEL_ERROR,
+    DbgPrint(TRACE_LEVEL_VERBOSE,
              ("<---> %s: context %p, %u entries at segment %u offset %I64x\n",
               __FUNCTION__, pSetPageTable->hContext, pSetPageTable->NumEntries,
               pSetPageTable->Address.SegmentId, pSetPageTable->Address.SegmentOffset));
@@ -733,11 +733,7 @@ VioGpu3DDestroyAllocation(_In_ CONST HANDLE hAdapter, _In_ CONST DXGKARG_DESTROY
     UNREFERENCED_PARAMETER(hAdapter);
     VIOGPU_ASSERT_CHK(pDestroyAllocation != NULL);
 
-    /* WARNING level while chasing the WDDM 2.0 OpenAllocation failure: one of
-     * the causes Microsoft lists for DxgkCbGetHandleData returning NULL is an
-     * allocation lifetime problem, so the ordering against create and open
-     * has to be visible. */
-    DbgPrint(TRACE_LEVEL_WARNING,
+    DbgPrint(TRACE_LEVEL_VERBOSE,
              ("<---> %s num=%u adapter=%p\n",
               __FUNCTION__, pDestroyAllocation->NumAllocations, hAdapter));
 
