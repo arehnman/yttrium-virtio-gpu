@@ -191,6 +191,10 @@ VioGpuAdapter::VioGpuAdapter(_In_ DEVICE_OBJECT *pPhysicalDeviceObject)
     m_u32NumCapsets = 0;
     m_u32NumScanouts = 0;
     m_supportedCapsetIDs = 0;
+    m_pPageTableSegment = NULL;
+    m_PageTableSegmentPA.QuadPart = 0;
+    m_PageTableSegmentSize = 0;
+    m_PageTableSegmentId = 0;
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
 }
@@ -203,6 +207,7 @@ VioGpuAdapter::~VioGpuAdapter(void)
     VioGpuAdapterClose();
     CloseResolutionEvent();
     HWClose();
+    FreePageTableSegment();
     m_Id = 0;
 }
 
@@ -241,6 +246,81 @@ BOOLEAN VioGpuAdapter::CheckHardware()
 }
 
 #pragma warning(disable : 4702)
+/*
+ * GpuMmu keeps page tables in a memory segment that VidMm can also map for the
+ * CPU, and a virtio GPU has no VRAM to offer for one, so the driver reserves
+ * contiguous system memory and describes it as a segment populated from system
+ * memory.  16 MB holds the 128 KB root table plus roughly a hundred leaf
+ * tables, which is several GB of mapped address space - far more than this
+ * needs, and small enough to still be contiguously allocatable at start.
+ */
+#define VIOGPU_PAGE_TABLE_SEGMENT_SIZE (16 * 1024 * 1024)
+
+NTSTATUS VioGpuAdapter::AllocatePageTableSegment(void)
+{
+    PAGED_CODE();
+
+    if (m_pPageTableSegment != NULL)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    PHYSICAL_ADDRESS Low;
+    PHYSICAL_ADDRESS High;
+    PHYSICAL_ADDRESS Boundary;
+
+    Low.QuadPart = 0;
+    High.QuadPart = MAXULONGLONG;
+    Boundary.QuadPart = 0;
+
+    m_pPageTableSegment = MmAllocateContiguousMemorySpecifyCache(VIOGPU_PAGE_TABLE_SEGMENT_SIZE,
+                                                                 Low,
+                                                                 High,
+                                                                 Boundary,
+                                                                 MmCached);
+
+    if (m_pPageTableSegment == NULL)
+    {
+        DbgPrint(TRACE_LEVEL_ERROR,
+                 ("%s could not reserve %u bytes of contiguous memory for page tables\n",
+                  __FUNCTION__, (UINT)VIOGPU_PAGE_TABLE_SEGMENT_SIZE));
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(m_pPageTableSegment, VIOGPU_PAGE_TABLE_SEGMENT_SIZE);
+    m_PageTableSegmentPA = MmGetPhysicalAddress(m_pPageTableSegment);
+    m_PageTableSegmentSize = VIOGPU_PAGE_TABLE_SEGMENT_SIZE;
+
+    /* Segment ids are one based and this segment follows the ones
+     * QUERYSEGMENT already reports, so it can be named here rather than
+     * depending on dxgkrnl asking for segments before page table levels. */
+    CPciBar *pShmemBar = m_PciResources.GetPciBar(m_VioDev.shmem_bar);
+    const bool bHasShmem = pShmemBar && m_VioDev.shmem_len;
+    m_PageTableSegmentId = (bHasShmem ? 2 : 1) + 1;
+
+    DbgPrint(TRACE_LEVEL_ERROR,
+             ("%s reserved %u bytes for page tables at physical %I64x\n",
+              __FUNCTION__, (UINT)m_PageTableSegmentSize, m_PageTableSegmentPA.QuadPart));
+
+    return STATUS_SUCCESS;
+}
+
+void VioGpuAdapter::FreePageTableSegment(void)
+{
+    PAGED_CODE();
+
+    if (m_pPageTableSegment == NULL)
+    {
+        return;
+    }
+
+    MmFreeContiguousMemory(m_pPageTableSegment);
+    m_pPageTableSegment = NULL;
+    m_PageTableSegmentPA.QuadPart = 0;
+    m_PageTableSegmentSize = 0;
+    m_PageTableSegmentId = 0;
+}
+
 NTSTATUS VioGpuAdapter::StartDevice(_In_ DXGK_START_INFO *pDxgkStartInfo,
                                     _In_ DXGKRNL_INTERFACE *pDxgkInterface,
                                     _Out_ ULONG *pNumberOfViews,
@@ -282,6 +362,20 @@ NTSTATUS VioGpuAdapter::StartDevice(_In_ DXGK_START_INFO *pDxgkStartInfo,
         return Status;
     }
 
+#if VIOGPU_WDDM2
+    /* Reserve the page table backing before any segment is reported: under
+     * GpuMmu there is nowhere else for VidMm to keep page tables, so failing
+     * here is worth saying out loud rather than starting without a segment
+     * and letting VidMm fail silently later. */
+    Status = AllocatePageTableSegment();
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint(TRACE_LEVEL_ERROR,
+                 ("AllocatePageTableSegment failed with status 0x%X\n", Status));
+        return Status;
+    }
+#endif
+
     Status = SetRegisterInfo(GetInstanceId(), 0);
     if (!NT_SUCCESS(Status))
     {
@@ -312,6 +406,7 @@ NTSTATUS VioGpuAdapter::StopDevice(VOID)
     StopWorkThread();
     vidpn.Stop();
     VioGpuAdapterClose();
+    FreePageTableSegment();
     return STATUS_SUCCESS;
 }
 
@@ -615,7 +710,39 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                           pDriverCaps->InterruptMessageNumber,
                           pDriverCaps->WDDMVersion));
                 RtlZeroMemory(pDriverCaps, pQueryAdapterInfo->OutputDataSize /*sizeof(DXGK_DRIVERCAPS)*/);
+                /*
+                 * D3D12 needs WDDM 2.0.  Everything the D3D12 runtime asks of
+                 * a user mode driver already works on 1.3 - it loads the
+                 * driver, negotiates the DDI, creates the device and accepts
+                 * every capability - and then fails creating a paging queue,
+                 * which 1.3 has no notion of.  Declaring 2.0 is the first step
+                 * in finding out what dxgkrnl actually requires beyond that;
+                 * it is not on its own a claim that this driver implements the
+                 * 2.0 memory model.
+                 */
+#if VIOGPU_WDDM2
+                pDriverCaps->WDDMVersion = DXGKDDI_WDDMv2;
+#else
                 pDriverCaps->WDDMVersion = DXGKDDI_WDDMv1_3;
+#endif
+
+                /*
+                 * Declaring the version alone is not enough: dxgkrnl still
+                 * refuses D3DKMTCreatePagingQueue with STATUS_NOT_IMPLEMENTED
+                 * because these caps are zero, and a WDDM 2.0 driver has to
+                 * say how the GPU addresses memory.
+                 *
+                 * IoMmu rather than GpuMmu, because there is no GPU here whose
+                 * page tables we could own - the device reaches guest memory
+                 * through the platform, so system physical addressing is what
+                 * is actually happening, and it spares the driver a page table
+                 * implementation it would only be pretending to have.
+                 */
+                /* WDDM 2.0 experiment, off: see git history. */
+#if VIOGPU_WDDM2
+                pDriverCaps->MemoryManagementCaps.VirtualAddressingSupported = 1;
+                pDriverCaps->MemoryManagementCaps.GpuMmuSupported = 1;
+#endif
                 pDriverCaps->HighestAcceptableAddress.QuadPart = (ULONG64)-1;
 
                 /*
@@ -761,9 +888,365 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 return STATUS_SUCCESS;
             }
 
+        case DXGKQAITYPE_QUERYSEGMENT4:
+            {
+                /*
+                 * The WDDM 2.0 form of QUERYSEGMENT3, and the query dxgkrnl
+                 * refused to proceed without once the 2.0 contract was
+                 * declared - it asked three times and got STATUS_NOT_SUPPORTED
+                 * each time, and dropped the adapter as a render device.
+                 *
+                 * The segments are the same ones QUERYSEGMENT3 reports; only
+                 * the shape of the answer differs.  Descriptors are addressed
+                 * by a stride the driver chooses rather than as a typed array,
+                 * so that the structure can grow without breaking callers.
+                 */
+                if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGK_QUERYSEGMENTOUT4))
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("%s OutputDataSize (%u) smaller than DXGK_QUERYSEGMENTOUT4 (%u)\n",
+                              __FUNCTION__,
+                              pQueryAdapterInfo->OutputDataSize,
+                              (UINT)sizeof(DXGK_QUERYSEGMENTOUT4)));
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+
+                DXGK_QUERYSEGMENTOUT4 *pSegmentInfo =
+                    (DXGK_QUERYSEGMENTOUT4 *)pQueryAdapterInfo->pOutputData;
+                ULONGLONG shmem_len = m_VioDev.shmem_len;
+                CPciBar *shmem_bar = m_PciResources.GetPciBar(m_VioDev.shmem_bar);
+                const bool has_shmem = shmem_bar && shmem_len;
+                const UINT base_segment_count = has_shmem ? 2 : 1;
+                /* One more segment holds page tables when GpuMmu is in play. */
+                const UINT segment_count =
+                    base_segment_count + (m_pPageTableSegment ? 1 : 0);
+
+                if (!pSegmentInfo->pSegmentDescriptor)
+                {
+                    /* Counting pass: say how many and how wide.  Log what the
+                     * caller brought in first - dxgkrnl came back with a
+                     * stride of its own last time, wider than this struct. */
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("%s counting pass: caller stride %u, NbSegment %u, output %u bytes\n",
+                              __FUNCTION__, (UINT)pSegmentInfo->SegmentDescriptorStride,
+                              pSegmentInfo->NbSegment, pQueryAdapterInfo->OutputDataSize));
+                    pSegmentInfo->NbSegment = segment_count;
+                    pSegmentInfo->SegmentDescriptorStride = sizeof(DXGK_SEGMENTDESCRIPTOR4);
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("%s reporting %u segments, stride %u\n",
+                              __FUNCTION__, segment_count,
+                              (UINT)sizeof(DXGK_SEGMENTDESCRIPTOR4)));
+                    return STATUS_SUCCESS;
+                }
+
+                const SIZE_T stride = pSegmentInfo->SegmentDescriptorStride ?
+                    pSegmentInfo->SegmentDescriptorStride : sizeof(DXGK_SEGMENTDESCRIPTOR4);
+                BYTE *pDescBytes = pSegmentInfo->pSegmentDescriptor;
+
+                RtlZeroMemory(pDescBytes, stride * segment_count);
+
+                pSegmentInfo->PagingBufferPrivateDataSize = 0;
+                /*
+                 * The paging buffer stays in segment 1, the aperture segment.
+                 * Moving it into the page table memory segment made
+                 * VIDMM_GLOBAL::InitDmaPools fail with
+                 * STATUS_INVALID_PARAMETER, which took the adapter down:
+                 * an aperture segment is where VidMm expects to map a paging
+                 * buffer, and it does exactly that under WDDM 1.3 with the
+                 * two MAP_APERTURE_SEGMENT calls right after segments are
+                 * reported.
+                 */
+                pSegmentInfo->PagingBufferSegmentId = 1;
+                pSegmentInfo->PagingBufferSize = 10 * PAGE_SIZE;
+
+                /* Segment 1: framebuffer/aperture, as QUERYSEGMENT3 reports it. */
+                DXGK_SEGMENTDESCRIPTOR4 *pSeg0 = (DXGK_SEGMENTDESCRIPTOR4 *)pDescBytes;
+                ULONGLONG segment1_base = 0xC0000000;
+                if (has_shmem)
+                {
+                    ULONGLONG min_base = ALIGN_UP_BY(shmem_len, PAGE_SIZE);
+                    if (segment1_base < min_base)
+                    {
+                        segment1_base = min_base;
+                    }
+                }
+                pSeg0->BaseAddress.QuadPart = segment1_base;
+                pSeg0->Flags.Aperture = TRUE;
+                pSeg0->Flags.CacheCoherent = TRUE;
+                pSeg0->Flags.CpuVisible = FALSE;
+                pSeg0->Flags.DirectFlip = TRUE;
+                pSeg0->Size = 256 * 1024 * 4096;
+                pSeg0->CommitLimit = 256 * 1024 * 4096;
+
+                if (has_shmem)
+                {
+                    /* Segment 2: BAR-backed shared memory, CPU visible. */
+                    DXGK_SEGMENTDESCRIPTOR4 *pSeg1 =
+                        (DXGK_SEGMENTDESCRIPTOR4 *)(pDescBytes + stride);
+                    PHYSICAL_ADDRESS shmem_pa = shmem_bar->GetPA();
+
+                    shmem_pa.QuadPart += m_VioDev.shmem_offset;
+
+                    pSeg1->BaseAddress.QuadPart = 0;
+                    pSeg1->Flags.Aperture = TRUE;
+                    pSeg1->Flags.CacheCoherent = FALSE;
+                    pSeg1->Flags.CpuVisible = TRUE;
+                    pSeg1->Flags.DirectFlip = FALSE;
+                    pSeg1->CpuTranslatedAddress = shmem_pa;
+                    pSeg1->Size = (SIZE_T)shmem_len;
+                    pSeg1->CommitLimit = (SIZE_T)shmem_len;
+                }
+
+                if (m_pPageTableSegment)
+                {
+                    /*
+                     * The page table segment: a real memory segment, not an
+                     * aperture, because VidMm allocates page tables out of it
+                     * and maps them for the CPU to write.  Its backing is the
+                     * contiguous system memory reserved at start, which is
+                     * what PopulatedFromSystemMemory describes.
+                     *
+                     * Segment ids are one based, so this one follows the
+                     * segments already reported above.
+                     */
+                    DXGK_SEGMENTDESCRIPTOR4 *pSegPt =
+                        (DXGK_SEGMENTDESCRIPTOR4 *)(pDescBytes + stride * base_segment_count);
+
+                    m_PageTableSegmentId = base_segment_count + 1;
+
+                    pSegPt->BaseAddress.QuadPart = 0;
+                    pSegPt->Flags.Aperture = FALSE;
+                    pSegPt->Flags.PopulatedFromSystemMemory = TRUE;
+                    pSegPt->Flags.CpuVisible = TRUE;
+                    pSegPt->Flags.CacheCoherent = TRUE;
+                    pSegPt->Flags.DirectFlip = FALSE;
+                    pSegPt->CpuTranslatedAddress = m_PageTableSegmentPA;
+                    pSegPt->Size = m_PageTableSegmentSize;
+                    /* Wholly system memory, so the system memory portion runs
+                     * to the end; CommitLimit is documented as applying to
+                     * aperture segments only and stays zero here. */
+                    pSegPt->SystemMemoryEndAddress = m_PageTableSegmentSize;
+
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("%s page table segment is id %u, %u bytes at physical %I64x\n",
+                              __FUNCTION__, m_PageTableSegmentId,
+                              (UINT)m_PageTableSegmentSize, m_PageTableSegmentPA.QuadPart));
+                }
+
+                DbgPrint(TRACE_LEVEL_ERROR,
+                         ("%s filled %u segments at stride %u, output %u bytes\n",
+                          __FUNCTION__, segment_count, (UINT)stride,
+                          pQueryAdapterInfo->OutputDataSize));
+                return STATUS_SUCCESS;
+            }
+
+        case DXGKQAITYPE_PHYSICALADAPTERCAPS:
+            {
+                /*
+                 * One execution node, which is the 3D engine QUERYSEGMENT and
+                 * GetNodeMetadata already describe, and paging runs on it too
+                 * because there is no separate copy engine behind a virtio
+                 * device.
+                 */
+                /*
+                 * dxgkrnl sizes this buffer for the DDI version the driver
+                 * declared, not for the one the driver was compiled against.
+                 * Declaring WDDM 2.0 gets 20 bytes - two WORDs, the handle and
+                 * the flags - while the 3.2 structure in the WDK is 32, having
+                 * gained VPRPagingNode and VirtualCopyNodeIndex since.
+                 * Demanding the larger size refused a query dxgkrnl requires,
+                 * and the adapter was torn down immediately afterwards.
+                 *
+                 * So require only as far as Flags, and write only that much.
+                 */
+                const UINT required = FIELD_OFFSET(DXGK_PHYSICALADAPTERCAPS, Flags) +
+                                      sizeof(DXGK_PHYSICALADAPTERFLAGS);
+
+                if (pQueryAdapterInfo->OutputDataSize < required)
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("%s OutputDataSize (%u) smaller than the %u bytes "
+                              "this query needs\n",
+                              __FUNCTION__, pQueryAdapterInfo->OutputDataSize, required));
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+
+                DXGK_PHYSICALADAPTERCAPS *pCaps =
+                    (DXGK_PHYSICALADAPTERCAPS *)pQueryAdapterInfo->pOutputData;
+
+                pCaps->NumExecutionNodes = 1;
+                pCaps->PagingNodeIndex = 0;
+
+                /*
+                 * Not the driver's own object, and not something dxgkrnl fills
+                 * in: this is dxgkrnl's device handle, the one handed to the
+                 * driver as DXGKRNL_INTERFACE::DeviceHandle at StartDevice,
+                 * echoed back so it can tie this physical adapter to that
+                 * device.  Leaving it zero is why its per physical adapter
+                 * records held a null object for every index, and why VidMm
+                 * died dereferencing one in ReadPhysicalAdapterConfiguration.
+                 */
+                pCaps->DxgkPhysicalAdapterHandle = m_DxgkInterface.DeviceHandle;
+
+                /*
+                 * These flags are per physical adapter and have to agree with
+                 * the MemoryManagementCaps declared above.  Zeroing them said
+                 * this adapter supports neither IoMmu nor GpuMmu addressing,
+                 * while the driver capabilities said IoMmu - and VidMm then
+                 * had no adapter to configure, which is the null pointer it
+                 * died on in ReadPhysicalAdapterConfiguration.
+                 */
+                RtlZeroMemory(&pCaps->Flags, sizeof(pCaps->Flags));
+                pCaps->Flags.GpuMmuSupported = 1;
+
+                DbgPrint(TRACE_LEVEL_ERROR, ("%s one execution node\n", __FUNCTION__));
+                return STATUS_SUCCESS;
+            }
+
+        case DXGKQAITYPE_HISTORYBUFFERPRECISION:
+            {
+                /*
+                 * Timestamp width for the scheduler's history buffers.  There
+                 * is no hardware counter behind a virtio device, so report the
+                 * full 64 bits of the software timestamps the driver already
+                 * keeps.
+                 */
+                if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGKARG_HISTORYBUFFERPRECISION))
+                {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+
+                DXGKARG_HISTORYBUFFERPRECISION *pPrecision =
+                    (DXGKARG_HISTORYBUFFERPRECISION *)pQueryAdapterInfo->pOutputData;
+
+                pPrecision->PrecisionBits = 64;
+
+                DbgPrint(TRACE_LEVEL_ERROR,
+                         ("%s history buffer precision 64 bits\n", __FUNCTION__));
+                return STATUS_SUCCESS;
+            }
+
+        case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
+            {
+                /*
+                 * None of the optional display capabilities are present: no
+                 * secure display, no virtual modes.  Zero is the answer, but
+                 * it has to be given rather than refused.
+                 */
+                if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGK_DISPLAY_DRIVERCAPS_EXTENSION))
+                {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+
+                RtlZeroMemory(pQueryAdapterInfo->pOutputData,
+                              sizeof(DXGK_DISPLAY_DRIVERCAPS_EXTENSION));
+
+                DbgPrint(TRACE_LEVEL_ERROR,
+                         ("%s display caps extension, none supported\n", __FUNCTION__));
+                return STATUS_SUCCESS;
+            }
+
+        case DXGKQAITYPE_GPUMMUCAPS:
+            {
+                /*
+                 * Declaring GpuMmu rather than IoMmu is what got dxgkrnl
+                 * talking again: with IoMmu it asked for nothing further and
+                 * failed silently inside VidMm, while with GpuMmu it names
+                 * each thing it still wants.  That makes this the path worth
+                 * following, even though a virtio device has no page tables of
+                 * its own - the answers here describe an address space dxgkrnl
+                 * can reason about, and what it asks for next is the point.
+                 *
+                 * Two levels of 4KB pages over a 32 bit address space, updated
+                 * by the CPU, because there is no GPU engine that could walk or
+                 * update a page table here.
+                 *
+                 * 32 bits rather than the 40 this first claimed: VidMm sizes a
+                 * page tracking structure from the address space, four bytes
+                 * per 4KB page, so 40 bits asked it for a gigabyte in one
+                 * allocation.  The ETW trace shows it attempting exactly
+                 * 0x40000042 bytes, failing, and destroying the VaAllocator it
+                 * had just created, which took the adapter down with it.  At
+                 * 32 bits the same structure is 4MB, and 4GB of address space
+                 * is far more than this driver has any use for yet.
+                 */
+                if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGK_GPUMMUCAPS))
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("%s GPUMMUCAPS wants %u bytes, got %u\n", __FUNCTION__,
+                              (UINT)sizeof(DXGK_GPUMMUCAPS), pQueryAdapterInfo->OutputDataSize));
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+
+                DXGK_GPUMMUCAPS *pMmu = (DXGK_GPUMMUCAPS *)pQueryAdapterInfo->pOutputData;
+
+                RtlZeroMemory(pMmu, sizeof(*pMmu));
+                pMmu->CacheCoherentMemorySupported = 1;
+                pMmu->PageTableUpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
+                pMmu->VirtualAddressBitCount = 32;
+                pMmu->PageTableLevelCount = 2;
+                pMmu->LeafPageTableSizeFor64KPagesInBytes = 0;
+
+                DbgPrint(TRACE_LEVEL_ERROR,
+                         ("%s gpummu caps: %u va bits, %u levels\n", __FUNCTION__,
+                          pMmu->VirtualAddressBitCount, pMmu->PageTableLevelCount));
+                return STATUS_SUCCESS;
+            }
+
+        case DXGKQAITYPE_PAGETABLELEVELDESC:
+            {
+                /*
+                 * Describes one level of the page table hierarchy GPUMMUCAPS
+                 * announced.  Two levels over 32 bits of address space, on 4KB
+                 * pages: the page offset takes 12 bits, leaving 20 bits to
+                 * split, so 10 index bits per level and a page table of 2^10
+                 * eight byte entries - one 8KB table per level, each leaf
+                 * covering 4MB.
+                 *
+                 * Level zero is the leaf.  Page tables live in the memory
+                 * segment reserved at start, because VidMm allocates them from
+                 * it and maps them for the CPU to write - an aperture segment
+                 * cannot back them, and neither of the two this driver already
+                 * reports is both a memory segment and CPU visible.
+                 */
+                const DXGK_QUERYPAGETABLELEVELDESCIN *pIn =
+                    (const DXGK_QUERYPAGETABLELEVELDESCIN *)pQueryAdapterInfo->pInputData;
+
+                if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGK_PAGE_TABLE_LEVEL_DESC))
+                {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+
+                DXGK_PAGE_TABLE_LEVEL_DESC *pLevel =
+                    (DXGK_PAGE_TABLE_LEVEL_DESC *)pQueryAdapterInfo->pOutputData;
+
+                RtlZeroMemory(pLevel, sizeof(*pLevel));
+                pLevel->PageTableIndexBitCount = 10;
+                pLevel->PageTableSegmentId = m_PageTableSegmentId;
+                pLevel->PagingProcessPageTableSegmentId = m_PageTableSegmentId;
+                pLevel->PageTableSizeInBytes = (1 << 10) * sizeof(UINT64);
+                pLevel->PageTableAlignmentInBytes = 0;
+
+                DbgPrint(TRACE_LEVEL_ERROR,
+                         ("%s page table level %u: %u index bits, %u bytes, segment %u\n",
+                          __FUNCTION__, pIn ? pIn->LevelIndex : 0,
+                          pLevel->PageTableIndexBitCount, pLevel->PageTableSizeInBytes,
+                          pLevel->PageTableSegmentId));
+                return STATUS_SUCCESS;
+            }
+
         default:
             {
-                DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s unknown type %d\n", __FUNCTION__, pQueryAdapterInfo->Type));
+                /*
+                 * ERROR rather than VERBOSE, because which queries go
+                 * unanswered is exactly the question at the moment and the
+                 * default trace level filters VERBOSE out.  D3D12 needs the
+                 * WDDM 2.0 memory model queries - QUERYSEGMENT4 (11),
+                 * GPUMMUCAPS (13), PAGETABLELEVELDESC (14) - and this driver
+                 * answers none of them.
+                 */
+                DbgPrint(TRACE_LEVEL_ERROR,
+                         ("<--- %s unanswered query type %d\n", __FUNCTION__, pQueryAdapterInfo->Type));
                 return STATUS_NOT_SUPPORTED;
             }
     }
@@ -2670,10 +3153,18 @@ bool VioGpuAdapter::GetShmemCpuTranslatedAddress(PHYSICAL_ADDRESS *out_pa)
 
 VioGpuAllocation *VioGpuAdapter::AllocationFromHandle(D3DKMT_HANDLE handle)
 {
-    DXGKARGCB_GETHANDLEDATA getHandleData;
+    /* Zero the whole argument: DXGKCB_GETHANDLEDATAFLAGS is DeviceSpecific:1
+     * plus Reserved:31, and assigning only DeviceSpecific left the reserved
+     * bits as uninitialised stack. WDDM 1.3 tolerated that; under 2.0 this
+     * call returns NULL for allocations that demonstrably exist - the
+     * handle is looked up immediately after DxgkCreateAllocation succeeded
+     * for it. */
+    DXGKARGCB_GETHANDLEDATA getHandleData = {};
     getHandleData.hObject = handle;
     getHandleData.Type = DXGK_HANDLE_ALLOCATION;
-    getHandleData.Flags.DeviceSpecific = 0;
+    getHandleData.Flags.Value = 0;
+    /* Asking with DeviceSpecific set as well was tried and returns NULL too,
+     * so the handle is not resolvable either way; the probe was removed. */
     return reinterpret_cast<VioGpuAllocation *>(m_DxgkInterface.DxgkCbGetHandleData(&getHandleData));
 }
 

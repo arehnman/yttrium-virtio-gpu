@@ -886,8 +886,15 @@ NTSTATUS VioGpuAllocation::DxgkCreateAllocation(VioGpuAdapter *adapter, DXGKARG_
         allocationInfo->EvictionSegmentSet = 0;
     }
 
-    DbgPrint(TRACE_LEVEL_INFORMATION,
-             ("<--- %s res_id=0x%x size=%d\n", __FUNCTION__, allocation->GetId(), allocationInfo->Size));
+    /* WARNING level so this is visible at the default nDebugLevel: the WDDM
+     * 2.0 boot failure turns on whether this runs at all before
+     * VioGpuDevice::OpenAllocation looks an allocation up and fails, and at
+     * INFORMATION it cannot be seen. */
+    DbgPrint(TRACE_LEVEL_WARNING,
+             ("<--- %s res_id=0x%x size=%d driver_handle=%p flags=0x%x num=%u adapter=%p\n",
+              __FUNCTION__, allocation->GetId(), allocationInfo->Size,
+              allocation, pCreateAllocation->Flags.Value,
+              pCreateAllocation->NumAllocations, adapter));
     return STATUS_SUCCESS;
 }
 

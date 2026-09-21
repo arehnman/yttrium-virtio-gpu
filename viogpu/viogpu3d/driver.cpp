@@ -90,7 +90,18 @@ extern "C" NTSTATUS DriverEntry(_In_ DRIVER_OBJECT *pDriverObject, _In_ UNICODE_
     DbgPrint(TRACE_LEVEL_FATAL, ("---> VIOGPU FULL build on on %s %s\n", __DATE__, __TIME__));
     DRIVER_INITIALIZATION_DATA InitialData = {0};
 
+    /*
+     * This, not the WDDMVersion capability, is what selects the DDI contract
+     * dxgkrnl holds the driver to.  While it said WDDM1_3 the 2.0 paths were
+     * never taken at all: no WDDM 2.0 entry point was called, no WDDM 2.0
+     * adapter query was asked, and D3DKMTCreatePagingQueue simply returned
+     * STATUS_NOT_IMPLEMENTED, which is what D3D12 needs.
+     */
+#if VIOGPU_WDDM2
+    InitialData.Version = DXGKDDI_INTERFACE_VERSION_WDDM2_0;
+#else
     InitialData.Version = DXGKDDI_INTERFACE_VERSION_WDDM1_3;
+#endif
 
     InitialData.DxgkDdiAddDevice = VioGpu3DAddDevice;
     InitialData.DxgkDdiStartDevice = VioGpu3DStartDevice;
@@ -156,6 +167,35 @@ extern "C" NTSTATUS DriverEntry(_In_ DRIVER_OBJECT *pDriverObject, _In_ UNICODE_
     InitialData.DxgkDdiCancelCommand = VioGpu3DDdiCancelCommand;
 
     InitialData.DxgkDdiGetNodeMetadata = VioGpu3DDdiGetNodeMetadata;
+
+    /* WDDM 2.0: present so dxgkrnl has something to call.  See their
+     * definitions - they exist to find out what it actually requires. */
+    InitialData.DxgkDdiCreateProcess = VioGpu3DDdiCreateProcess;
+    InitialData.DxgkDdiDestroyProcess = VioGpu3DDdiDestroyProcess;
+    InitialData.DxgkDdiSubmitCommandVirtual = VioGpu3DDdiSubmitCommandVirtual;
+
+    /*
+     * The rest of what WDDM 2.0 adds to this structure.  With every adapter
+     * query answered the adapter is still declined for render, and it is
+     * declined before a single WDDM 2.0 entry point is called - which is what
+     * dxgkrnl validating this table for missing entries would look like.
+     *
+     * One shared stub stands in for all of them, cast into each slot: the
+     * Microsoft x64 convention is caller-cleanup, so a callee that ignores its
+     * arguments and returns in RAX is harmless whether the caller expected
+     * void or an NTSTATUS.  If the theory is right the adapter starts and none
+     * of these is ever entered; if one is entered, the log says so and it gets
+     * a real implementation then.
+     */
+    InitialData.DxgkDdiRenderGdi = (PDXGKDDI_RENDERGDI)VioGpu3DDdiWddm2Stub;
+    /* Required at DDI 0x5008 and above; a null here fails the whole adapter
+     * with STATUS_INVALID_PARAMETER and watchdog error 1DD6. */
+    InitialData.DxgkDdiCalibrateGpuClock = VioGpu3DDdiCalibrateGpuClock;
+    InitialData.DxgkDdiSetRootPageTable = VioGpu3DDdiSetRootPageTable;
+    InitialData.DxgkDdiGetRootPageTableSize = VioGpu3DDdiGetRootPageTableSize;
+    InitialData.DxgkDdiMapCpuHostAperture = (PDXGKDDI_MAPCPUHOSTAPERTURE)VioGpu3DDdiWddm2Stub;
+    InitialData.DxgkDdiUnmapCpuHostAperture = (PDXGKDDI_UNMAPCPUHOSTAPERTURE)VioGpu3DDdiWddm2Stub;
+    InitialData.DxgkDdiSetStablePowerState = (PDXGKDDI_SETSTABLEPOWERSTATE)VioGpu3DDdiWddm2Stub;
     InitialData.DxgkDdiControlInterrupt = VioGpu3DDdiControlInterrupt;
     InitialData.DxgkDdiGetScanLine = VioGpu3DDdiGetScanLine;
 
@@ -354,6 +394,192 @@ VioGpu3DQueryAdapterInfo(_In_ CONST HANDLE hAdapter, _In_ CONST DXGKARG_QUERYADA
     return pAdapter->QueryAdapterInfo(pQueryAdapterInfo);
 }
 
+/*
+ * WDDM 2.0 entry points, present so that dxgkrnl has something to call.
+ *
+ * Declaring WDDM 2.0 and the addressing capabilities is not enough on its own:
+ * D3DKMTCreatePagingQueue still fails with STATUS_NOT_IMPLEMENTED, which says
+ * dxgkrnl wants the entry points themselves.  Whether it calls these, and in
+ * what order, is what they exist to find out - each one says so and succeeds,
+ * so the first thing that genuinely cannot work shows up as a different
+ * failure rather than hiding behind this one.
+ *
+ * None of these do anything yet.  That is deliberate: a paravirtual device
+ * with no VRAM has nothing to page and no page tables to own, so the question
+ * is how much of the model dxgkrnl insists on rather than how much of it this
+ * device needs.
+ */
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiWddm2Stub(void)
+{
+    DbgPrint(TRACE_LEVEL_ERROR, ("<---> %s\n", __FUNCTION__));
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+/*
+ * Called only when GPUMMUCAPS::PageTableLevelCount is two, which is what this
+ * driver reports, so the shared stub was never right here: the argument is
+ * in/out and the return value carries the size.  Round the requested entry
+ * count up to a whole page of eight byte entries, because the root table lives
+ * in a memory segment and has to be a whole number of that segment's pages.
+ */
+SIZE_T
+APIENTRY
+VioGpu3DDdiGetRootPageTableSize(_In_ CONST HANDLE hAdapter,
+                                _Inout_ DXGKARG_GETROOTPAGETABLESIZE *pArgs)
+{
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(hAdapter);
+
+    if (pArgs == NULL)
+    {
+        return 0;
+    }
+
+    const UINT PtesPerPage = PAGE_SIZE / sizeof(UINT64);
+    UINT Pages = (pArgs->NumberOfPte + PtesPerPage - 1) / PtesPerPage;
+
+    if (Pages == 0)
+    {
+        Pages = 1;
+    }
+
+    pArgs->NumberOfPte = Pages * PtesPerPage;
+
+    DbgPrint(TRACE_LEVEL_ERROR,
+             ("<---> %s: adapter %u, %u entries in %u bytes\n", __FUNCTION__,
+              pArgs->PhysicalAdapterIndex, pArgs->NumberOfPte, Pages * PAGE_SIZE));
+
+    return (SIZE_T)Pages * PAGE_SIZE;
+}
+
+/*
+ * There is no register to point at a root page table on this device, so noting
+ * the call is all this can do.  The entries it describes are written by VidMm
+ * itself, because GPUMMUCAPS asks for CPU_VIRTUAL update mode.
+ */
+VOID
+APIENTRY
+VioGpu3DDdiSetRootPageTable(_In_ CONST HANDLE hAdapter,
+                            _In_ CONST DXGKARG_SETROOTPAGETABLE *pSetPageTable)
+{
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(hAdapter);
+
+    if (pSetPageTable == NULL)
+    {
+        return;
+    }
+
+    DbgPrint(TRACE_LEVEL_ERROR,
+             ("<---> %s: context %p, %u entries at segment %u offset %I64x\n",
+              __FUNCTION__, pSetPageTable->hContext, pSetPageTable->NumEntries,
+              pSetPageTable->Address.SegmentId, pSetPageTable->Address.SegmentOffset));
+}
+
+/*
+ * The one DDI dxgkrnl refuses to start a WDDM 2.0 adapter without.
+ *
+ * DXGADAPTER::Initialize checks, for a dxgmms2 adapter declaring DDI
+ * version 0x5008 or later, that both DxgkDdiCalibrateGpuClock and
+ * DxgkDdiSetStablePowerState are present; a null in either logs watchdog
+ * error 1DD6 and fails the whole adapter with STATUS_INVALID_PARAMETER,
+ * without ever calling the driver or naming what it wanted.  WDDM 1.3 is
+ * DDI 0x4002, below the threshold, which is why the same driver starts
+ * fine there.
+ *
+ * There is no GPU clock to read: work is timed on the CPU side and handed
+ * to the host, so the performance counter is the only clock this device
+ * has.  Reporting it as both timebases is the truthful answer here - the
+ * two counters then advance together, which is what a shared timebase
+ * means, rather than inventing a GPU frequency.
+ *
+ * Callable at DISPATCH_LEVEL, so this must not be pageable.
+ */
+#pragma code_seg(push)
+#pragma code_seg()
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiCalibrateGpuClock(_In_ CONST HANDLE hAdapter,
+                             UINT32 NodeOrdinal,
+                             UINT32 EngineOrdinal,
+                             _Out_ DXGKARG_CALIBRATEGPUCLOCK *pClockCalibration)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(NodeOrdinal);
+    UNREFERENCED_PARAMETER(EngineOrdinal);
+
+    if (pClockCalibration == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    LARGE_INTEGER Frequency;
+    LARGE_INTEGER Counter = KeQueryPerformanceCounter(&Frequency);
+
+    RtlZeroMemory(pClockCalibration, sizeof(*pClockCalibration));
+    pClockCalibration->GpuFrequency = (ULONGLONG)Frequency.QuadPart;
+    pClockCalibration->GpuClockCounter = (ULONGLONG)Counter.QuadPart;
+    pClockCalibration->CpuClockCounter = (ULONGLONG)Counter.QuadPart;
+
+    return STATUS_SUCCESS;
+}
+
+#pragma code_seg(pop)
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiCreateProcess(_In_ CONST HANDLE hAdapter, _Inout_ DXGKARG_CREATEPROCESS *pArgs)
+{
+    PAGED_CODE();
+    DbgPrint(TRACE_LEVEL_ERROR, ("<---> %s\n", __FUNCTION__));
+
+    UNREFERENCED_PARAMETER(hAdapter);
+
+    if (pArgs == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* A handle dxgkrnl only ever hands back to us; nothing is behind it. */
+    pArgs->hKmdProcess = (HANDLE)(ULONG_PTR)1;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiDestroyProcess(_In_ CONST HANDLE hAdapter, _In_ CONST HANDLE hKmdProcess)
+{
+    PAGED_CODE();
+    DbgPrint(TRACE_LEVEL_ERROR, ("<---> %s\n", __FUNCTION__));
+
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(hKmdProcess);
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiSubmitCommandVirtual(_In_ CONST HANDLE hAdapter,
+                                _In_ CONST DXGKARG_SUBMITCOMMANDVIRTUAL *pSubmitCommand)
+{
+    DbgPrint(TRACE_LEVEL_ERROR, ("<---> %s\n", __FUNCTION__));
+
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(pSubmitCommand);
+
+    /* Submission still goes the way it always has; reaching here would mean
+     * the scheduler took a path this driver does not implement. */
+    return STATUS_NOT_IMPLEMENTED;
+}
+
 NTSTATUS
 APIENTRY
 VioGpu3DDdiGetNodeMetadata(_In_ CONST HANDLE hAdapter,
@@ -502,6 +728,14 @@ VioGpu3DDestroyAllocation(_In_ CONST HANDLE hAdapter, _In_ CONST DXGKARG_DESTROY
     UNREFERENCED_PARAMETER(hAdapter);
     VIOGPU_ASSERT_CHK(pDestroyAllocation != NULL);
 
+    /* WARNING level while chasing the WDDM 2.0 OpenAllocation failure: one of
+     * the causes Microsoft lists for DxgkCbGetHandleData returning NULL is an
+     * allocation lifetime problem, so the ordering against create and open
+     * has to be visible. */
+    DbgPrint(TRACE_LEVEL_WARNING,
+             ("<---> %s num=%u adapter=%p\n",
+              __FUNCTION__, pDestroyAllocation->NumAllocations, hAdapter));
+
     for (ULONG i = 0; i < pDestroyAllocation->NumAllocations; i++)
     {
         VioGpuAllocation *allocation = reinterpret_cast<VioGpuAllocation *>(pDestroyAllocation->pAllocationList[i]);
@@ -574,6 +808,74 @@ VioGpu3DBuildPagingBuffer(_In_ CONST HANDLE hAdapter, _In_ DXGKARG_BUILDPAGINGBU
                 DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s (unmap aperture segment)\n", __FUNCTION__));
                 return Status;
             }
+#if VIOGPU_WDDM2
+        case DXGK_OPERATION_UPDATE_PAGE_TABLE:
+            {
+                /*
+                 * GPUMMUCAPS asks for CPU_VIRTUAL updates, so VidMm hands over
+                 * a CPU mapping of the page table and the driver writes the
+                 * entries itself.  Nothing here ever walks these tables - a
+                 * virtio GPU resolves resources by handle, not by address -
+                 * but VidMm owns them and reads them back, so they have to
+                 * hold exactly what it put there.
+                 */
+                DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *pUpdate =
+                    &pBuildPagingBuffer->UpdatePageTable;
+
+                if (pUpdate->UpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("<--- %s (update page table) mode %d was not asked for\n",
+                              __FUNCTION__, pUpdate->UpdateMode));
+                    return STATUS_NOT_SUPPORTED;
+                }
+
+                if (pUpdate->Flags.Use64KBPages)
+                {
+                    /* Never advertised, so say so rather than guess a layout. */
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("<--- %s (update page table) 64KB pages are not supported\n",
+                              __FUNCTION__));
+                    return STATUS_NOT_SUPPORTED;
+                }
+
+                DXGK_PTE *pDest = (DXGK_PTE *)pUpdate->PageTableAddress.CpuVirtual;
+                const DXGK_PTE *pSrc = pUpdate->pPageTableEntries;
+
+                if (pDest == NULL || pSrc == NULL)
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("<--- %s (update page table) missing %s\n", __FUNCTION__,
+                              pDest == NULL ? "destination" : "entries"));
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                pDest += pUpdate->StartIndex;
+
+                if (pUpdate->Flags.Repeat)
+                {
+                    /* One entry stamped across the range, which is how VidMm
+                     * fills or clears a span of addresses. */
+                    for (UINT i = 0; i < pUpdate->NumPageTableEntries; i++)
+                    {
+                        pDest[i] = *pSrc;
+                    }
+                }
+                else
+                {
+                    RtlCopyMemory(pDest, pSrc,
+                                  pUpdate->NumPageTableEntries * sizeof(DXGK_PTE));
+                }
+
+                return STATUS_SUCCESS;
+            }
+        case DXGK_OPERATION_FLUSH_TLB:
+            {
+                /* There is no GPU MMU behind these tables, so nothing caches
+                 * translations and there is nothing to flush. */
+                return STATUS_SUCCESS;
+            }
+#endif
         default:
             {
                 DbgPrint(TRACE_LEVEL_ERROR,

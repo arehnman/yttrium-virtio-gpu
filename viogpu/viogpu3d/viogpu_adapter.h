@@ -108,6 +108,18 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
     VioGpuObj *m_pCursorBuf;
     VioGpuMemSegment m_CursorSegment;
 
+    /* Contiguous system memory carved out to back the page table segment.
+     * Under GpuMmu, VidMm puts page tables in a memory segment it can also
+     * map for the CPU, and a virtio GPU has no VRAM to offer for that, so the
+     * driver reserves system memory and describes it as a segment populated
+     * from system memory.  Declared unconditionally: the WDDM 2.0 guard is
+     * not visible in every translation unit that sees this header, and a
+     * conditional member would change the class layout per file. */
+    PVOID m_pPageTableSegment;
+    PHYSICAL_ADDRESS m_PageTableSegmentPA;
+    SIZE_T m_PageTableSegmentSize;
+    UINT m_PageTableSegmentId;
+
     ULONG m_Id;
     volatile LONG m_VsyncInterruptEnabled;
 
@@ -268,6 +280,8 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
 
     NTSTATUS HWInit(PCM_RESOURCE_LIST pResList);
     NTSTATUS HWClose(void);
+    NTSTATUS AllocatePageTableSegment(void);
+    void FreePageTableSegment(void);
 
     ULONG GetInstanceId(void)
     {

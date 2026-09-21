@@ -96,6 +96,49 @@ VioGpu3DDdiGetNodeMetadata(_In_ CONST HANDLE hAdapter,
                            UINT NodeOrdinal,
                            _Out_ DXGKARG_GETNODEMETADATA *pGetNodeMetadata);
 
+/*
+ * Declare WDDM 2.0 rather than 1.3.  D3D12 needs 2.0; 1.3 is the configuration
+ * that is known to work, and being able to build either without editing three
+ * separate places is what makes comparing a working adapter start against a
+ * failing one practical.
+ */
+#define VIOGPU_WDDM2 1
+
+/* WDDM 2.0 entry points - see driver.cpp for why they exist. */
+NTSTATUS
+APIENTRY
+VioGpu3DDdiWddm2Stub(void);
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiCalibrateGpuClock(_In_ CONST HANDLE hAdapter,
+                             UINT32 NodeOrdinal,
+                             UINT32 EngineOrdinal,
+                             _Out_ DXGKARG_CALIBRATEGPUCLOCK *pClockCalibration);
+
+SIZE_T
+APIENTRY
+VioGpu3DDdiGetRootPageTableSize(_In_ CONST HANDLE hAdapter,
+                                _Inout_ DXGKARG_GETROOTPAGETABLESIZE *pArgs);
+
+VOID
+APIENTRY
+VioGpu3DDdiSetRootPageTable(_In_ CONST HANDLE hAdapter,
+                            _In_ CONST DXGKARG_SETROOTPAGETABLE *pSetPageTable);
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiCreateProcess(_In_ CONST HANDLE hAdapter, _Inout_ DXGKARG_CREATEPROCESS *pArgs);
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiDestroyProcess(_In_ CONST HANDLE hAdapter, _In_ CONST HANDLE hKmdProcess);
+
+NTSTATUS
+APIENTRY
+VioGpu3DDdiSubmitCommandVirtual(_In_ CONST HANDLE hAdapter,
+                                _In_ CONST DXGKARG_SUBMITCOMMANDVIRTUAL *pSubmitCommand);
+
 NTSTATUS
 APIENTRY
 VioGpu3DSetPointerPosition(_In_ CONST HANDLE hAdapter, _In_ CONST DXGKARG_SETPOINTERPOSITION *pSetPointerPosition);
