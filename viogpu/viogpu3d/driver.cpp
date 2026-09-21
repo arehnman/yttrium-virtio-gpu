@@ -168,6 +168,7 @@ extern "C" NTSTATUS DriverEntry(_In_ DRIVER_OBJECT *pDriverObject, _In_ UNICODE_
 
     InitialData.DxgkDdiGetNodeMetadata = VioGpu3DDdiGetNodeMetadata;
 
+#if VIOGPU_WDDM2
     /* WDDM 2.0: present so dxgkrnl has something to call.  See their
      * definitions - they exist to find out what it actually requires. */
     InitialData.DxgkDdiCreateProcess = VioGpu3DDdiCreateProcess;
@@ -196,6 +197,7 @@ extern "C" NTSTATUS DriverEntry(_In_ DRIVER_OBJECT *pDriverObject, _In_ UNICODE_
     InitialData.DxgkDdiMapCpuHostAperture = (PDXGKDDI_MAPCPUHOSTAPERTURE)VioGpu3DDdiWddm2Stub;
     InitialData.DxgkDdiUnmapCpuHostAperture = (PDXGKDDI_UNMAPCPUHOSTAPERTURE)VioGpu3DDdiWddm2Stub;
     InitialData.DxgkDdiSetStablePowerState = (PDXGKDDI_SETSTABLEPOWERSTATE)VioGpu3DDdiWddm2Stub;
+#endif
     InitialData.DxgkDdiControlInterrupt = VioGpu3DDdiControlInterrupt;
     InitialData.DxgkDdiGetScanLine = VioGpu3DDdiGetScanLine;
 
@@ -394,6 +396,7 @@ VioGpu3DQueryAdapterInfo(_In_ CONST HANDLE hAdapter, _In_ CONST DXGKARG_QUERYADA
     return pAdapter->QueryAdapterInfo(pQueryAdapterInfo);
 }
 
+#if VIOGPU_WDDM2
 /*
  * WDDM 2.0 entry points, present so that dxgkrnl has something to call.
  *
@@ -422,7 +425,7 @@ VioGpu3DDdiWddm2Stub(void)
  * Called only when GPUMMUCAPS::PageTableLevelCount is two, which is what this
  * driver reports, so the shared stub was never right here: the argument is
  * in/out and the return value carries the size.  Round the requested entry
- * count up to a whole page of eight byte entries, because the root table lives
+ * count up to a whole page of driver-format entries, because the root table lives
  * in a memory segment and has to be a whole number of that segment's pages.
  */
 SIZE_T
@@ -439,7 +442,8 @@ VioGpu3DDdiGetRootPageTableSize(_In_ CONST HANDLE hAdapter,
         return 0;
     }
 
-    const UINT PtesPerPage = PAGE_SIZE / sizeof(UINT64);
+    C_ASSERT(PAGE_SIZE % sizeof(VIOGPU_PAGE_TABLE_ENTRY) == 0);
+    const UINT PtesPerPage = PAGE_SIZE / sizeof(VIOGPU_PAGE_TABLE_ENTRY);
     UINT Pages = (pArgs->NumberOfPte + PtesPerPage - 1) / PtesPerPage;
 
     if (Pages == 0)
@@ -579,6 +583,7 @@ VioGpu3DDdiSubmitCommandVirtual(_In_ CONST HANDLE hAdapter,
      * the scheduler took a path this driver does not implement. */
     return STATUS_NOT_IMPLEMENTED;
 }
+#endif
 
 NTSTATUS
 APIENTRY
@@ -814,10 +819,10 @@ VioGpu3DBuildPagingBuffer(_In_ CONST HANDLE hAdapter, _In_ DXGKARG_BUILDPAGINGBU
                 /*
                  * GPUMMUCAPS asks for CPU_VIRTUAL updates, so VidMm hands over
                  * a CPU mapping of the page table and the driver writes the
-                 * entries itself.  Nothing here ever walks these tables - a
-                 * virtio GPU resolves resources by handle, not by address -
-                 * but VidMm owns them and reads them back, so they have to
-                 * hold exactly what it put there.
+                 * entries itself.  The current driver format stores the DDI
+                 * entries verbatim; VidMm treats that format as opaque.  Its
+                 * mapped allocation is sized from PAGETABLELEVELDESC, so the
+                 * advertised size and this write stride must agree.
                  */
                 DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *pUpdate =
                     &pBuildPagingBuffer->UpdatePageTable;
@@ -839,7 +844,25 @@ VioGpu3DBuildPagingBuffer(_In_ CONST HANDLE hAdapter, _In_ DXGKARG_BUILDPAGINGBU
                     return STATUS_NOT_SUPPORTED;
                 }
 
-                DXGK_PTE *pDest = (DXGK_PTE *)pUpdate->PageTableAddress.CpuVirtual;
+                if (pUpdate->PageTableLevel >= VIOGPU_PAGE_TABLE_LEVEL_COUNT ||
+                    pUpdate->StartIndex > VIOGPU_PAGE_TABLE_ENTRY_COUNT ||
+                    pUpdate->NumPageTableEntries >
+                        VIOGPU_PAGE_TABLE_ENTRY_COUNT - pUpdate->StartIndex)
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR,
+                             ("<--- %s (update page table) invalid range level=%u start=%u count=%u\n",
+                              __FUNCTION__, pUpdate->PageTableLevel,
+                              pUpdate->StartIndex, pUpdate->NumPageTableEntries));
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                if (pUpdate->NumPageTableEntries == 0)
+                {
+                    return STATUS_SUCCESS;
+                }
+
+                VIOGPU_PAGE_TABLE_ENTRY *pDest =
+                    (VIOGPU_PAGE_TABLE_ENTRY *)pUpdate->PageTableAddress.CpuVirtual;
                 const DXGK_PTE *pSrc = pUpdate->pPageTableEntries;
 
                 if (pDest == NULL || pSrc == NULL)
@@ -864,7 +887,7 @@ VioGpu3DBuildPagingBuffer(_In_ CONST HANDLE hAdapter, _In_ DXGKARG_BUILDPAGINGBU
                 else
                 {
                     RtlCopyMemory(pDest, pSrc,
-                                  pUpdate->NumPageTableEntries * sizeof(DXGK_PTE));
+                                  pUpdate->NumPageTableEntries * sizeof(VIOGPU_PAGE_TABLE_ENTRY));
                 }
 
                 return STATUS_SUCCESS;

@@ -634,7 +634,8 @@ NTSTATUS VioGpuDevice::OpenAllocation(_In_ CONST DXGKARG_OPENALLOCATION *pOpenAl
     for (UINT i = 0; i < pOpenAllocation->NumAllocations; i++)
     {
         DXGK_OPENALLOCATIONINFO *openAllocationInfo = &pOpenAllocation->pOpenAllocation[i];
-        VioGpuAllocation *allocation = m_pAdapter->AllocationFromHandle(openAllocationInfo->hAllocation);
+        VioGpuAllocationReference allocationReference(m_pAdapter, openAllocationInfo->hAllocation);
+        VioGpuAllocation *allocation = allocationReference.Get();
 
         if (!allocation)
         {

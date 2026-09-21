@@ -32,7 +32,7 @@
 
 #pragma once
 
-#include "helper.h"
+#include "driver.h"
 #include "viogpu_allocation.h"
 #include "viogpu_queue.h"
 #include "viogpu_shmem_allocator.h"
@@ -108,17 +108,18 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
     VioGpuObj *m_pCursorBuf;
     VioGpuMemSegment m_CursorSegment;
 
+#if VIOGPU_WDDM2
     /* Contiguous system memory carved out to back the page table segment.
      * Under GpuMmu, VidMm puts page tables in a memory segment it can also
      * map for the CPU, and a virtio GPU has no VRAM to offer for that, so the
      * driver reserves system memory and describes it as a segment populated
-     * from system memory.  Declared unconditionally: the WDDM 2.0 guard is
-     * not visible in every translation unit that sees this header, and a
-     * conditional member would change the class layout per file. */
+     * from system memory.  Include driver.h above so the build switch and
+     * class layout agree in every translation unit. */
     PVOID m_pPageTableSegment;
     PHYSICAL_ADDRESS m_PageTableSegmentPA;
     SIZE_T m_PageTableSegmentSize;
     UINT m_PageTableSegmentId;
+#endif
 
     ULONG m_Id;
     volatile LONG m_VsyncInterruptEnabled;
@@ -261,7 +262,6 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
         return m_PciResources.IsMSIEnabled();
     }
 
-    VioGpuAllocation *AllocationFromHandle(D3DKMT_HANDLE handle);
     VioGpuResource *ResourceFromHandle(D3DKMT_HANDLE handle);
 
     PHYSICAL_ADDRESS GetFrameBufferPA(void)
@@ -280,8 +280,10 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
 
     NTSTATUS HWInit(PCM_RESOURCE_LIST pResList);
     NTSTATUS HWClose(void);
+#if VIOGPU_WDDM2
     NTSTATUS AllocatePageTableSegment(void);
     void FreePageTableSegment(void);
+#endif
 
     ULONG GetInstanceId(void)
     {
@@ -335,4 +337,27 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
                                  HANDLE ownerPid);
 
     UINT64 RequestParameter(ULONG parmeter);
+};
+
+// Hold the Dxgkrnl allocation reference throughout each KMD use of its data.
+class VioGpuAllocationReference
+{
+  public:
+    VioGpuAllocationReference(VioGpuAdapter *adapter, D3DKMT_HANDLE handle);
+    ~VioGpuAllocationReference();
+
+    VioGpuAllocation *Get() const
+    {
+        return m_allocation;
+    }
+
+  private:
+    VioGpuAllocationReference(const VioGpuAllocationReference &) = delete;
+    VioGpuAllocationReference &operator=(const VioGpuAllocationReference &) = delete;
+
+    VioGpuAdapter *m_adapter;
+    VioGpuAllocation *m_allocation;
+#if VIOGPU_WDDM2
+    DXGKARG_RELEASE_HANDLE m_releaseHandle;
+#endif
 };

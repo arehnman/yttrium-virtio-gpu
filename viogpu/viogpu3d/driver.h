@@ -102,7 +102,18 @@ VioGpu3DDdiGetNodeMetadata(_In_ CONST HANDLE hAdapter,
  * separate places is what makes comparing a working adapter start against a
  * failing one practical.
  */
+#ifndef VIOGPU_WDDM2
 #define VIOGPU_WDDM2 1
+#endif
+
+#if VIOGPU_WDDM2
+
+// The current page-table format stores the DDI entries verbatim.
+// Keep the advertised table sizes and the update stride in the same units.
+typedef DXGK_PTE VIOGPU_PAGE_TABLE_ENTRY;
+static const UINT VIOGPU_PAGE_TABLE_INDEX_BITS = 10;
+static const UINT VIOGPU_PAGE_TABLE_ENTRY_COUNT = 1u << VIOGPU_PAGE_TABLE_INDEX_BITS;
+static const UINT VIOGPU_PAGE_TABLE_LEVEL_COUNT = 2;
 
 /* WDDM 2.0 entry points - see driver.cpp for why they exist. */
 NTSTATUS
@@ -138,6 +149,7 @@ NTSTATUS
 APIENTRY
 VioGpu3DDdiSubmitCommandVirtual(_In_ CONST HANDLE hAdapter,
                                 _In_ CONST DXGKARG_SUBMITCOMMANDVIRTUAL *pSubmitCommand);
+#endif
 
 NTSTATUS
 APIENTRY

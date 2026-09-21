@@ -191,10 +191,12 @@ VioGpuAdapter::VioGpuAdapter(_In_ DEVICE_OBJECT *pPhysicalDeviceObject)
     m_u32NumCapsets = 0;
     m_u32NumScanouts = 0;
     m_supportedCapsetIDs = 0;
+#if VIOGPU_WDDM2
     m_pPageTableSegment = NULL;
     m_PageTableSegmentPA.QuadPart = 0;
     m_PageTableSegmentSize = 0;
     m_PageTableSegmentId = 0;
+#endif
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
 }
@@ -207,7 +209,9 @@ VioGpuAdapter::~VioGpuAdapter(void)
     VioGpuAdapterClose();
     CloseResolutionEvent();
     HWClose();
+#if VIOGPU_WDDM2
     FreePageTableSegment();
+#endif
     m_Id = 0;
 }
 
@@ -246,6 +250,7 @@ BOOLEAN VioGpuAdapter::CheckHardware()
 }
 
 #pragma warning(disable : 4702)
+#if VIOGPU_WDDM2
 /*
  * GpuMmu keeps page tables in a memory segment that VidMm can also map for the
  * CPU, and a virtio GPU has no VRAM to offer for one, so the driver reserves
@@ -320,6 +325,7 @@ void VioGpuAdapter::FreePageTableSegment(void)
     m_PageTableSegmentSize = 0;
     m_PageTableSegmentId = 0;
 }
+#endif
 
 NTSTATUS VioGpuAdapter::StartDevice(_In_ DXGK_START_INFO *pDxgkStartInfo,
                                     _In_ DXGKRNL_INTERFACE *pDxgkInterface,
@@ -406,7 +412,9 @@ NTSTATUS VioGpuAdapter::StopDevice(VOID)
     StopWorkThread();
     vidpn.Stop();
     VioGpuAdapterClose();
+#if VIOGPU_WDDM2
     FreePageTableSegment();
+#endif
     return STATUS_SUCCESS;
 }
 
@@ -888,6 +896,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 return STATUS_SUCCESS;
             }
 
+#if VIOGPU_WDDM2
         case DXGKQAITYPE_QUERYSEGMENT4:
             {
                 /*
@@ -1103,6 +1112,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 return STATUS_SUCCESS;
             }
 
+#endif
         case DXGKQAITYPE_HISTORYBUFFERPRECISION:
             {
                 /*
@@ -1126,6 +1136,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 return STATUS_SUCCESS;
             }
 
+#if VIOGPU_WDDM2
         case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
             {
                 /*
@@ -1184,7 +1195,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 pMmu->CacheCoherentMemorySupported = 1;
                 pMmu->PageTableUpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
                 pMmu->VirtualAddressBitCount = 32;
-                pMmu->PageTableLevelCount = 2;
+                pMmu->PageTableLevelCount = VIOGPU_PAGE_TABLE_LEVEL_COUNT;
                 pMmu->LeafPageTableSizeFor64KPagesInBytes = 0;
 
                 DbgPrint(TRACE_LEVEL_ERROR,
@@ -1200,7 +1211,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                  * announced.  Two levels over 32 bits of address space, on 4KB
                  * pages: the page offset takes 12 bits, leaving 20 bits to
                  * split, so 10 index bits per level and a page table of 2^10
-                 * eight byte entries - one 8KB table per level, each leaf
+                 * driver-format entries - one 16KB table per level, each leaf
                  * covering 4MB.
                  *
                  * Level zero is the leaf.  Page tables live in the memory
@@ -1221,10 +1232,11 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                     (DXGK_PAGE_TABLE_LEVEL_DESC *)pQueryAdapterInfo->pOutputData;
 
                 RtlZeroMemory(pLevel, sizeof(*pLevel));
-                pLevel->PageTableIndexBitCount = 10;
+                pLevel->PageTableIndexBitCount = VIOGPU_PAGE_TABLE_INDEX_BITS;
                 pLevel->PageTableSegmentId = m_PageTableSegmentId;
                 pLevel->PagingProcessPageTableSegmentId = m_PageTableSegmentId;
-                pLevel->PageTableSizeInBytes = (1 << 10) * sizeof(UINT64);
+                pLevel->PageTableSizeInBytes =
+                    VIOGPU_PAGE_TABLE_ENTRY_COUNT * sizeof(VIOGPU_PAGE_TABLE_ENTRY);
                 pLevel->PageTableAlignmentInBytes = 0;
 
                 DbgPrint(TRACE_LEVEL_ERROR,
@@ -1235,6 +1247,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 return STATUS_SUCCESS;
             }
 
+#endif
         default:
             {
                 /*
@@ -1264,6 +1277,23 @@ void VioGpuAdapter::FreeShmemRange(ULONGLONG offset, ULONGLONG size)
     PAGED_CODE();
 
     m_shmem_allocator.Free(offset, size);
+}
+
+// Keep SEH in a separate function so Escape can use scoped references.
+static NTSTATUS VioGpuCopyCapsetToUser(void *destination, const void *source, ULONG size)
+{
+    PAGED_CODE();
+
+    __try
+    {
+        memcpy(destination, source, size);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        DbgPrint(TRACE_LEVEL_FATAL, ("Failed to copy"));
+        return STATUS_INVALID_PARAMETER;
+    }
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
@@ -1363,16 +1393,8 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
 
                 UCHAR *buf = ((PGPU_RESP_CAPSET)vbuf->resp_buf)->capset_data;
                 ULONG to_copy = min(pVioGpuEscape->Capset.Size, pCapsetInfo->max_size);
-                __try
-                {
-                    UCHAR *userCapset = (UCHAR *)(ULONG_PTR)pVioGpuEscape->Capset.Capset;
-                    memcpy(userCapset, buf, to_copy);
-                }
-                __except (EXCEPTION_EXECUTE_HANDLER)
-                {
-                    DbgPrint(TRACE_LEVEL_FATAL, ("Failed to copy"));
-                    status = STATUS_INVALID_PARAMETER;
-                }
+                UCHAR *userCapset = (UCHAR *)(ULONG_PTR)pVioGpuEscape->Capset.Capset;
+                status = VioGpuCopyCapsetToUser(userCapset, buf, to_copy);
                 ctrlQueue.ReleaseBuffer(vbuf);
 
                 break;
@@ -1389,7 +1411,8 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
                               size));
                     return STATUS_INVALID_BUFFER_SIZE;
                 }
-                VioGpuAllocation *allocation = AllocationFromHandle(pVioGpuEscape->ResourceInfo.ResHandle);
+                VioGpuAllocationReference allocationReference(this, pVioGpuEscape->ResourceInfo.ResHandle);
+                VioGpuAllocation *allocation = allocationReference.Get();
                 if (allocation == NULL)
                 {
                     DbgPrint(TRACE_LEVEL_ERROR, ("%s ivalid handle\n", __FUNCTION__));
@@ -1413,7 +1436,8 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
                     return STATUS_INVALID_BUFFER_SIZE;
                 }
 
-                VioGpuAllocation *allocation = AllocationFromHandle(pVioGpuEscape->ResourceAttachWait.ResHandle);
+                VioGpuAllocationReference allocationReference(this, pVioGpuEscape->ResourceAttachWait.ResHandle);
+                VioGpuAllocation *allocation = allocationReference.Get();
                 if (allocation == NULL)
                 {
                     DbgPrint(TRACE_LEVEL_ERROR, ("%s invalid attach-wait handle\n", __FUNCTION__));
@@ -1481,7 +1505,8 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
                               size));
                     return STATUS_INVALID_BUFFER_SIZE;
                 }
-                VioGpuAllocation *allocation = AllocationFromHandle(pVioGpuEscape->ResourceBusy.ResHandle);
+                VioGpuAllocationReference allocationReference(this, pVioGpuEscape->ResourceBusy.ResHandle);
+                VioGpuAllocation *allocation = allocationReference.Get();
                 if (allocation == NULL)
                 {
                     DbgPrint(TRACE_LEVEL_ERROR, ("%s ivalid handle\n", __FUNCTION__));
@@ -1503,7 +1528,8 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
                               size));
                     return STATUS_INVALID_BUFFER_SIZE;
                 }
-                VioGpuAllocation *allocation = AllocationFromHandle(pVioGpuEscape->ResourceMapBlob.ResHandle);
+                VioGpuAllocationReference allocationReference(this, pVioGpuEscape->ResourceMapBlob.ResHandle);
+                VioGpuAllocation *allocation = allocationReference.Get();
                 if (allocation == NULL)
                 {
                     DbgPrint(TRACE_LEVEL_ERROR, ("%s invalid handle\n", __FUNCTION__));
@@ -1526,7 +1552,8 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
                               size));
                     return STATUS_INVALID_BUFFER_SIZE;
                 }
-                VioGpuAllocation *allocation = AllocationFromHandle(pVioGpuEscape->ResourceUnmapBlob.ResHandle);
+                VioGpuAllocationReference allocationReference(this, pVioGpuEscape->ResourceUnmapBlob.ResHandle);
+                VioGpuAllocation *allocation = allocationReference.Get();
                 if (allocation == NULL)
                 {
                     DbgPrint(TRACE_LEVEL_ERROR, ("%s invalid handle\n", __FUNCTION__));
@@ -1549,7 +1576,8 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
                               size));
                     return STATUS_INVALID_BUFFER_SIZE;
                 }
-                VioGpuAllocation *allocation = AllocationFromHandle(pVioGpuEscape->ResourceSetScanoutBlob.ResHandle);
+                VioGpuAllocationReference allocationReference(this, pVioGpuEscape->ResourceSetScanoutBlob.ResHandle);
+                VioGpuAllocation *allocation = allocationReference.Get();
                 if (allocation == NULL)
                 {
                     DbgPrint(TRACE_LEVEL_ERROR, ("%s invalid handle\n", __FUNCTION__));
@@ -3151,21 +3179,51 @@ bool VioGpuAdapter::GetShmemCpuTranslatedAddress(PHYSICAL_ADDRESS *out_pa)
     return true;
 }
 
-VioGpuAllocation *VioGpuAdapter::AllocationFromHandle(D3DKMT_HANDLE handle)
+VioGpuAllocationReference::VioGpuAllocationReference(VioGpuAdapter *adapter, D3DKMT_HANDLE handle)
+    : m_adapter(adapter), m_allocation(NULL)
+#if VIOGPU_WDDM2
+    , m_releaseHandle(NULL)
+#endif
 {
-    /* Zero the whole argument: DXGKCB_GETHANDLEDATAFLAGS is DeviceSpecific:1
-     * plus Reserved:31, and assigning only DeviceSpecific left the reserved
-     * bits as uninitialised stack. WDDM 1.3 tolerated that; under 2.0 this
-     * call returns NULL for allocations that demonstrably exist - the
-     * handle is looked up immediately after DxgkCreateAllocation succeeded
-     * for it. */
+    PAGED_CODE();
+
     DXGKARGCB_GETHANDLEDATA getHandleData = {};
     getHandleData.hObject = handle;
     getHandleData.Type = DXGK_HANDLE_ALLOCATION;
     getHandleData.Flags.Value = 0;
-    /* Asking with DeviceSpecific set as well was tried and returns NULL too,
-     * so the handle is not resolvable either way; the probe was removed. */
-    return reinterpret_cast<VioGpuAllocation *>(m_DxgkInterface.DxgkCbGetHandleData(&getHandleData));
+    PDXGKRNL_INTERFACE dxgkInterface = m_adapter->GetDxgkInterface();
+
+#if VIOGPU_WDDM2
+    // WDDM 2.0 requires the reference-taking callback for allocation data.
+    if (!dxgkInterface->DxgkCbAcquireHandleData || !dxgkInterface->DxgkCbReleaseHandleData)
+    {
+        DbgPrint(TRACE_LEVEL_ERROR,
+                 ("%s missing WDDM 2.0 allocation reference callbacks adapter=%p handle=0x%x\n",
+                  __FUNCTION__, adapter, handle));
+        return;
+    }
+    m_allocation = reinterpret_cast<VioGpuAllocation *>(
+        dxgkInterface->DxgkCbAcquireHandleData(&getHandleData, &m_releaseHandle));
+#else
+    // The explicitly selected WDDM 1.3 build uses its original callback contract.
+    m_allocation = reinterpret_cast<VioGpuAllocation *>(
+        dxgkInterface->DxgkCbGetHandleData(&getHandleData));
+#endif
+}
+
+VioGpuAllocationReference::~VioGpuAllocationReference()
+{
+    PAGED_CODE();
+
+#if VIOGPU_WDDM2
+    if (m_releaseHandle)
+    {
+        DXGKARGCB_RELEASEHANDLEDATA releaseHandleData = {};
+        releaseHandleData.ReleaseHandle = m_releaseHandle;
+        releaseHandleData.Type = DXGK_HANDLE_ALLOCATION;
+        m_adapter->GetDxgkInterface()->DxgkCbReleaseHandleData(releaseHandleData);
+    }
+#endif
 }
 
 VioGpuResource *VioGpuAdapter::ResourceFromHandle(D3DKMT_HANDLE handle)
