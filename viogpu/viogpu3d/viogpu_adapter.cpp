@@ -1331,6 +1331,15 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
 
     switch (pVioGpuEscape->Type)
     {
+        case VIOGPU_QUERY_TIMELINE_SUBMIT:
+            if (pVioGpuEscape->DataLength < sizeof(UINT))
+                return STATUS_INVALID_BUFFER_SIZE;
+#if VIOGPU_WDDM2
+            pVioGpuEscape->Id = VIOGPU_TIMELINE_SUBMIT_VERSION;
+            break;
+#else
+            return STATUS_NOT_SUPPORTED;
+#endif
         case VIOGPU_GET_DEVICE_ID:
             {
                 CreateResolutionEvent();
@@ -2070,6 +2079,29 @@ void VioGpuAdapter::RecordDmaCompletionForPreemptionFromIsr(UINT fenceId,
     }
 }
 
+struct VIOGPU_TRACK_DMA_CONTEXT
+{
+    VIOGPU_DMA_RETIREMENT_QUEUE *queue;
+    VIOGPU_DMA_RETIREMENT *entry;
+};
+
+static BOOLEAN TrackDmaSubmissionSynchronized(void *opaque)
+{
+    VIOGPU_TRACK_DMA_CONTEXT *ctx = static_cast<VIOGPU_TRACK_DMA_CONTEXT *>(opaque);
+    VioGpuDmaRetirementPush(ctx->queue, ctx->entry);
+    return TRUE;
+}
+
+BOOLEAN VioGpuAdapter::TrackDmaSubmission(VioGpuCommand *command)
+{
+    const UINT node = command->GetNodeOrdinal();
+    const UINT engine = command->GetEngineOrdinal();
+    if (node >= kMaxTrackedNodes || engine >= kMaxTrackedEngines)
+        return FALSE;
+    VIOGPU_TRACK_DMA_CONTEXT ctx = { &m_dmaRetirement[node][engine], &command->Retirement };
+    return ExecuteSynchronized(TrackDmaSubmissionSynchronized, &ctx);
+}
+
 VOID VioGpuAdapter::CtrlStagePushFromIsr(PGPU_VBUFFER buf, UINT len)
 {
     buf->isr_stage_len = len;
@@ -2539,6 +2571,28 @@ void VioGpuAdapter::VioGpuAdapterClose()
         InterlockedExchange((PLONG)&m_PendingWorks, 0);
         KeClearEvent(&m_ConfigUpdateEvent);
         virtio_device_reset(&m_VioDev);
+        for (UINT node = 0; node < kMaxTrackedNodes; ++node)
+        {
+            for (UINT engine = 0; engine < kMaxTrackedEngines; ++engine)
+            {
+                VIOGPU_DMA_RETIREMENT_QUEUE *queue = &m_dmaRetirement[node][engine];
+                while (queue->Head)
+                {
+                    VIOGPU_DMA_RETIREMENT *entry = queue->Head;
+                    queue->Head = entry->Next;
+                    entry->Next = NULL;
+                    if (entry->Packet)
+                    {
+                        PGPU_VBUFFER packet = static_cast<PGPU_VBUFFER>(entry->Packet);
+                        entry->Packet = NULL;
+                        // Teardown releases ownership, never reports successful DMA.
+                        packet->complete_cb(packet->complete_ctx);
+                        ctrlQueue.ReleaseBuffer(packet);
+                    }
+                }
+                queue->Tail = NULL;
+            }
+        }
         virtio_delete_queues(&m_VioDev);
         ctrlQueue.Close();
         m_CursorQueue.Close();
@@ -3027,23 +3081,57 @@ BOOLEAN VioGpuAdapter::InterruptRoutine(_In_ ULONG MessageNumber)
                 if (pvbuf->complete_cb == VioGpuCommand::RunningCbDone && pvbuf->complete_ctx != NULL)
                 {
                     VioGpuCommand *cmd = reinterpret_cast<VioGpuCommand *>(pvbuf->complete_ctx);
+                    const PGPU_CTRL_HDR request = reinterpret_cast<PGPU_CTRL_HDR>(pvbuf->buf);
+                    const PGPU_CTRL_HDR response = reinterpret_cast<PGPU_CTRL_HDR>(pvbuf->resp_buf);
+                    if ((request->flags & VIRTIO_GPU_FLAG_INFO_RING_IDX) &&
+                        (!response || len < sizeof(*response) ||
+                         response->type != VIRTIO_GPU_RESP_OK_NODATA ||
+                         !(response->flags & VIRTIO_GPU_FLAG_FENCE) ||
+                         response->fence_id != request->fence_id))
+                    {
+                        // An error response is not GPU completion. Retain this
+                        // DMA and later engine retirements for the scheduler's
+                        // existing timeout/reset path; never signal success.
+                        cmd->Retirement.Failed = 1;
+                        DbgPrint(TRACE_LEVEL_ERROR,
+                                 ("%s GPU timeline response failed owner=viogpu3d fence=%u len=%u response=%#x; DMA retained for timeout/reset\n",
+                                  __FUNCTION__, cmd->GetSubmissionFenceId(), len,
+                                  response && len >= sizeof(*response) ? response->type : 0));
+                    }
                     UINT fenceId = 0;
                     UINT nodeOrdinal = 0;
                     UINT engineOrdinal = 0;
                     if (cmd->OnPacketCompletedFromIsr(&fenceId, &nodeOrdinal, &engineOrdinal))
                     {
-                        ULONG ctxId = cmd->GetContextId();
-                        HANDLE ownerPid = cmd->GetOwnerProcessId();
-                        if (ShouldNotifyDmaFence(fenceId, nodeOrdinal, engineOrdinal, ctxId, ownerPid))
+                        // Hold the final packet reference until every older DMA
+                        // on this engine has completed. A CPU/legacy timeline
+                        // response must never overtake a pending GPU timeline.
+                        cmd->Retirement.Packet = pvbuf;
+                        cmd->Retirement.Length = len;
+                        VIOGPU_DMA_RETIREMENT_QUEUE *queue = &m_dmaRetirement[nodeOrdinal][engineOrdinal];
+                        VIOGPU_DMA_RETIREMENT *ready;
+                        while ((ready = VioGpuDmaRetirementPopReady(queue)) != NULL)
                         {
-                            DXGKARGCB_NOTIFY_INTERRUPT_DATA interrupt = {};
-                            interrupt.InterruptType = DXGK_INTERRUPT_DMA_COMPLETED;
-                            interrupt.DmaCompleted.SubmissionFenceId = fenceId;
-                            interrupt.DmaCompleted.NodeOrdinal = nodeOrdinal;
-                            interrupt.DmaCompleted.EngineOrdinal = engineOrdinal;
-                            m_DxgkInterface.DxgkCbNotifyInterrupt(m_DxgkInterface.DeviceHandle, &interrupt);
+                            PGPU_VBUFFER packet = static_cast<PGPU_VBUFFER>(ready->Packet);
+                            VioGpuCommand *retired = static_cast<VioGpuCommand *>(packet->complete_ctx);
+                            const UINT retiredFence = retired->GetSubmissionFenceId();
+                            const ULONG ctxId = retired->GetContextId();
+                            const HANDLE ownerPid = retired->GetOwnerProcessId();
+                            if (ShouldNotifyDmaFence(retiredFence, nodeOrdinal, engineOrdinal, ctxId, ownerPid))
+                            {
+                                DXGKARGCB_NOTIFY_INTERRUPT_DATA interrupt = {};
+                                interrupt.InterruptType = DXGK_INTERRUPT_DMA_COMPLETED;
+                                interrupt.DmaCompleted.SubmissionFenceId = retiredFence;
+                                interrupt.DmaCompleted.NodeOrdinal = nodeOrdinal;
+                                interrupt.DmaCompleted.EngineOrdinal = engineOrdinal;
+                                m_DxgkInterface.DxgkCbNotifyInterrupt(m_DxgkInterface.DeviceHandle, &interrupt);
+                            }
+                            RecordDmaCompletionForPreemptionFromIsr(retiredFence, nodeOrdinal, engineOrdinal, ctxId, ownerPid);
+                            const UINT packetLength = ready->Length;
+                            ready->Packet = NULL;
+                            CtrlStagePushFromIsr(packet, packetLength);
                         }
-                        RecordDmaCompletionForPreemptionFromIsr(fenceId, nodeOrdinal, engineOrdinal, ctxId, ownerPid);
+                        continue; // Final packet was staged above or retained.
                     }
                 }
 

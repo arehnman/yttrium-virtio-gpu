@@ -75,6 +75,9 @@ typedef struct _VIOGPU_ADAPTERINFO
 #define VIOGPU_RES_ATTACH_WAIT       0x106
 
 #define VIOGPU_CTX_INIT              0x200
+#define VIOGPU_QUERY_TIMELINE_SUBMIT 0x301
+#define VIOGPU_TIMELINE_SUBMIT_VERSION 1u
+
 #define VIOGPU_SUBMIT_CMD            0x300
 
 #pragma pack(1)
@@ -242,6 +245,14 @@ typedef struct _VIOGPU_CREATE_ALLOCATION_EXCHANGE
 #define VIOGPU_CMD_TRANSFER_TO_HOST   0x2 // Transfer resource to host
 #define VIOGPU_CMD_TRANSFER_FROM_HOST 0x3 // Transfer resource to host
 #define VIOGPU_CMD_PRESENT_FLIP       0x4 // Flip scanout to a resource
+
+#define VIOGPU_CMD_SUBMIT_TIMELINE 0x5 // Venus GPU queue timeline, WDDM 2 only
+
+typedef struct _VIOGPU_TIMELINE_SUBMIT
+{
+    UINT RingIndex; // 1..63; timeline 0 is CPU transport completion.
+    UINT Reserved;  // Must be zero; Venus protocol bytes follow.
+} VIOGPU_TIMELINE_SUBMIT;
 
 #pragma pack(1)
 typedef struct _VIOGPU_COMMAND_HDR

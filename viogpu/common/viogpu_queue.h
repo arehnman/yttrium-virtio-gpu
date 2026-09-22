@@ -315,7 +315,8 @@ class CtrlQueue : public VioGpuQueue
                        ULONG size,
                        ULONG ctx_id,
                        void (*complete_cb)(void *),
-                       void *complete_ctx);
+                       void *complete_ctx,
+                       UCHAR ringIndex = 0);
     UINT TransferHostCmd(bool to_host,
                          ULONG res_id,
                          VIOGPU_TRANSFER_CMD *options,

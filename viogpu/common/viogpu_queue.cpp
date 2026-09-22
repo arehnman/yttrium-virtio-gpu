@@ -1083,7 +1083,8 @@ UINT CtrlQueue::SubmitCommand(void *cmdbuf,
                               ULONG size,
                               ULONG ctx_id,
                               void (*complete_cb)(void *),
-                              void *complete_ctx)
+                              void *complete_ctx,
+                              UCHAR ringIndex)
 {
     DbgPrint(TRACE_LEVEL_VERBOSE, ("---> %s\n", __FUNCTION__));
 
@@ -1101,6 +1102,11 @@ UINT CtrlQueue::SubmitCommand(void *cmdbuf,
     cmd->size = size;
 
     cmd->hdr.ctx_id = ctx_id;
+    if (ringIndex)
+    {
+        cmd->hdr.flags |= VIRTIO_GPU_FLAG_INFO_RING_IDX;
+        cmd->hdr.ring_idx = ringIndex;
+    }
 
     vbuf->data_buf = cmdbuf;
     vbuf->data_size = size;

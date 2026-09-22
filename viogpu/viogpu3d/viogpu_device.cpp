@@ -540,6 +540,27 @@ NTSTATUS VioGpuDevice::Render(DXGKARG_RENDER *pRender)
             // Use the header snapshot that bounded this copy. The user-mode
             // header may have changed while the command body was copied.
             memcpy(dmaBuf, &cmdHdr, sizeof(cmdHdr));
+            if (cmdHdr.type == VIOGPU_CMD_SUBMIT_TIMELINE)
+            {
+#if VIOGPU_WDDM2
+                if (!IsVenusContext() || !IsContextCreated() ||
+                    cmdHdr.size <= sizeof(VIOGPU_TIMELINE_SUBMIT))
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR, ("%s rejected GPU timeline packet: invalid Venus context or size\n", __FUNCTION__));
+                    return STATUS_INVALID_PARAMETER;
+                }
+                const VIOGPU_TIMELINE_SUBMIT *timeline =
+                    reinterpret_cast<const VIOGPU_TIMELINE_SUBMIT *>(dmaBuf + sizeof(cmdHdr));
+                if (!timeline->RingIndex || timeline->RingIndex >= 64 || timeline->Reserved)
+                {
+                    DbgPrint(TRACE_LEVEL_ERROR, ("%s rejected GPU timeline packet: ring=%u reserved=%u\n", __FUNCTION__, timeline->RingIndex, timeline->Reserved));
+                    return STATUS_INVALID_PARAMETER;
+                }
+#else
+                DbgPrint(TRACE_LEVEL_ERROR, ("%s GPU timeline submission requires WDDM 2\n", __FUNCTION__));
+                return STATUS_NOT_SUPPORTED;
+#endif
+            }
             if (cmdHdr.type == VIOGPU_CMD_PRESENT_FLIP)
             {
                 if (cmdHdr.size < sizeof(VIOGPU_PRESENT_FLIP_CMD))

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "helper.h"
+#include "viogpu_dma_retirement.h"
 
 
 class VioGpuAdapter;
@@ -20,6 +21,8 @@ class VioGpuCommand
     VioGpuCommand(VioGpuAdapter *adapter);
     ~VioGpuCommand();
 
+    VIOGPU_DMA_RETIREMENT Retirement = {};
+    void CancelBeforeRun() { InterlockedIncrement(&m_done); VioGpuCommandDone(); }
     void Run();
 
     void PrepareSubmit(const DXGKARG_SUBMITCOMMAND *pSubmitCommand);

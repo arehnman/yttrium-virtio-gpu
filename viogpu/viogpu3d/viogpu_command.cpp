@@ -681,6 +681,7 @@ static UINT CountDmaCompletionPackets(char *command, char *end, UINT fenceId, BO
         {
             case VIOGPU_CMD_NOP:
             case VIOGPU_CMD_SUBMIT:
+            case VIOGPU_CMD_SUBMIT_TIMELINE:
             case VIOGPU_CMD_TRANSFER_TO_HOST:
             case VIOGPU_CMD_TRANSFER_FROM_HOST:
                 packets++;
@@ -889,13 +890,25 @@ void VioGpuCommand::Run()
                 }
 
             case VIOGPU_CMD_SUBMIT:
+            case VIOGPU_CMD_SUBMIT_TIMELINE:
                 {
                     InterlockedIncrement(&m_done);
+                    UCHAR ringIndex = 0;
+                    UINT protocolSize = cmdHdr->size;
+                    if (cmdHdr->type == VIOGPU_CMD_SUBMIT_TIMELINE)
+                    {
+                        // Render validated the immutable DMA copy before scheduling.
+                        const VIOGPU_TIMELINE_SUBMIT *timeline =
+                            reinterpret_cast<const VIOGPU_TIMELINE_SUBMIT *>(cmdBody);
+                        ringIndex = static_cast<UCHAR>(timeline->RingIndex);
+                        cmdBody = (void *)(timeline + 1);
+                        protocolSize -= sizeof(*timeline);
+                    }
 
                     PBYTE submitCmd = NULL;
-                    if (cmdHdr->size > 0)
+                    if (protocolSize > 0)
                     {
-                        submitCmd = new (NonPagedPoolNx) BYTE[cmdHdr->size];
+                        submitCmd = new (NonPagedPoolNx) BYTE[protocolSize];
                         if (!submitCmd)
                         {
                             DbgPrint(TRACE_LEVEL_FATAL,
@@ -909,14 +922,15 @@ void VioGpuCommand::Run()
                                          static_cast<ULONG_PTR>(cmdHdr->size),
                                          reinterpret_cast<ULONG_PTR>(this));
                         }
-                        RtlCopyMemory(submitCmd, cmdBody, cmdHdr->size);
+                        RtlCopyMemory(submitCmd, cmdBody, protocolSize);
                     }
 
                     UINT ret = m_pAdapter->ctrlQueue.SubmitCommand(submitCmd,
-                                                                    cmdHdr->size,
+                                                                    protocolSize,
                                                                     m_pContext->GetId(),
                                                                     VioGpuCommand::RunningCbDone,
-                                                                    this);
+                                                                    this,
+                                                                    ringIndex);
                     if (ret)
                     {
                         BugCheckDmaQueueSubmitFailure(this,
@@ -1345,6 +1359,12 @@ NTSTATUS VioGpuCommander::SubmitCommand(const DXGKARG_SUBMITCOMMAND *pSubmitComm
     }
 
     cmd->PrepareSubmit(pSubmitCommand);
+    if (!m_pAdapter->TrackDmaSubmission(cmd))
+    {
+        DbgPrint(TRACE_LEVEL_ERROR, ("%s cannot track DMA retirement fence=%u\n", __FUNCTION__, cmd->GetSubmissionFenceId()));
+        cmd->CancelBeforeRun();
+        return STATUS_UNSUCCESSFUL;
+    }
     m_pAdapter->RecordDmaSubmittedForPreemption(cmd->GetSubmissionFenceId(),
                                                 cmd->GetNodeOrdinal(),
                                                 cmd->GetEngineOrdinal(),

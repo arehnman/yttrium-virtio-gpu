@@ -128,6 +128,7 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
     KSPIN_LOCK m_ctrlStageListLock;
     static const UINT kMaxTrackedNodes = 8;
     static const UINT kMaxTrackedEngines = 8;
+    VIOGPU_DMA_RETIREMENT_QUEUE m_dmaRetirement[kMaxTrackedNodes][kMaxTrackedEngines] = {};
     volatile LONG m_lastNotifiedFence[kMaxTrackedNodes][kMaxTrackedEngines];
     volatile LONG m_preemptSubmittedOutstanding[kMaxTrackedNodes][kMaxTrackedEngines];
     volatile LONG m_pendingPreemptionFence[kMaxTrackedNodes][kMaxTrackedEngines];
@@ -232,6 +233,7 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
                                                  ULONG ctxId,
                                                  HANDLE ownerPid);
     UINT GetLastNotifiedFence(UINT nodeOrdinal, UINT engineOrdinal);
+    BOOLEAN TrackDmaSubmission(VioGpuCommand *command);
 
     void SetVsyncInterruptEnabled(BOOLEAN enabled)
     {
