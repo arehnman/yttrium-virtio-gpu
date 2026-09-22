@@ -26,6 +26,7 @@ VioGpu3D_Files.Vulkan = 11 ; system32
 [SourceDisksFiles]
 viogpu3d.sys = 1,,f
 viogpu_d3d10_x64.dll = 1,x64,
+yttrium12_x64.dll = 1,x64,
 viogpu_wgl_x64.dll = 1,x64,
 libEGL_x64.dll = 1,x64,
 libGLESv1_CM_x64.dll = 1,x64,
@@ -44,6 +45,7 @@ viogpu3d.sys,,,2
 
 [VioGpu3D_Files.Usermode]
 viogpu_d3d10.dll,viogpu_d3d10_x64.dll,,0
+yttrium12.dll,yttrium12_x64.dll,,0
 viogpu_wgl.dll,viogpu_wgl_x64.dll,,0
 libEGL.dll,libEGL_x64.dll,,0
 libGLESv1_CM.dll,libGLESv1_CM_x64.dll,,0
@@ -82,11 +84,12 @@ HKR,,TypesSupported,%REG_DWORD%,7
 HKR,, HWCursor,                    %REG_DWORD%, 0
 HKR,, FlexResolution,              %REG_DWORD%, 1
 HKR,, UsePhysicalMemory,           %REG_DWORD%, 0
-HKR,, UserModeDriverName,          %REG_MULTI_SZ%, %11%\viogpu_d3d10.dll,%11%\viogpu_d3d10.dll,%11%\viogpu_d3d10.dll,%11%\viogpu_d3d10.dll
+; KMTUMDVERSION_DX12 is slot 3; preserve the existing DX9/DX10/DX11 UMDs.
+HKR,, UserModeDriverName,          %REG_MULTI_SZ%, %11%\viogpu_d3d10.dll,%11%\viogpu_d3d10.dll,%11%\viogpu_d3d10.dll,%11%\yttrium12.dll
 HKR,, OpenGLDriverName,            %REG_MULTI_SZ%, %11%\viogpu_wgl.dll
 HKR,, OpenGLFlags,                 %REG_DWORD%, 3
 HKR,, OpenGLVersion,               %REG_DWORD%, 4096
-HKR,, InstalledDisplayDrivers,     %REG_MULTI_SZ%, viogpu_d3d10,viogpu_d3d10,viogpu_d3d10
+HKR,, InstalledDisplayDrivers,     %REG_MULTI_SZ%, viogpu_d3d10,viogpu_d3d10,viogpu_d3d10,yttrium12
 
 
 HKLM,"SOFTWARE\Khronos\Vulkan\Drivers","%11%\lvp_icd.x86_64.json",%REG_DWORD%,0
