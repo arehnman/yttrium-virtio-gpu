@@ -17,9 +17,10 @@ if (-not (Test-Path -LiteralPath $SourcePath)) {
 }
 
 $sourceName = [System.IO.Path]::GetFileName($SourcePath)
-if ($sourceName -like 'viogpu3d_x64*') {
-  if ([string]::IsNullOrWhiteSpace($Yttrium12Path) -or
-      -not (Test-Path -LiteralPath $Yttrium12Path -PathType Leaf)) {
+$yttrium12Present = $sourceName -like 'viogpu3d_x64*' -and
+  -not [string]::IsNullOrWhiteSpace($Yttrium12Path)
+if ($yttrium12Present) {
+  if (-not (Test-Path -LiteralPath $Yttrium12Path -PathType Leaf)) {
     throw "Missing x64 Yttrium12 payload: $Yttrium12Path. Build yttrium12 first and set YTTRIUM12_DLL_x64."
   }
 
@@ -62,6 +63,13 @@ if ($hasWow64Payload -and -not $wow64LvpPresent) {
 }
 
 $lines = [System.IO.File]::ReadAllLines($SourcePath)
+if (-not $yttrium12Present) {
+  # Drop the optional DX12 slot without removing the DX9/DX10/DX11 entries
+  # on the same registry lines. The remaining matches are file entries.
+  $lines = $lines -replace ',%11%\\yttrium12\.dll\s*$', ''
+  $lines = $lines -replace ',yttrium12\s*$', ''
+  $removeTokens += @('yttrium12_x64.dll')
+}
 if ($removeTokens.Count -ne 0) {
   $pattern = ($removeTokens | ForEach-Object { [regex]::Escape($_) }) -join '|'
   $lines = @($lines | Where-Object { $_ -notmatch $pattern })
@@ -75,4 +83,4 @@ if (-not (Test-Path -LiteralPath $destinationDir)) {
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllLines($DestinationPath, $lines, $utf8NoBom)
 
-Write-Host "Prepared $DestinationPath (native Lavapipe=$nativeLvpPresent, wow64 Lavapipe=$wow64LvpPresent, Yttrium12=$Yttrium12Path)"
+Write-Host "Prepared $DestinationPath (native Lavapipe=$nativeLvpPresent, wow64 Lavapipe=$wow64LvpPresent, Yttrium12=$yttrium12Present)"

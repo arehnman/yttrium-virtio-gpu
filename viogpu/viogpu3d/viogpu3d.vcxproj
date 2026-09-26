@@ -462,12 +462,14 @@
   </ItemGroup>
   <PropertyGroup>
     <MesaStageDir>$(IntDir)messa_stage\</MesaStageDir>
-    <YTTRIUM12_DLL_x64 Condition="'$(YTTRIUM12_DLL_x64)' == ''">$(MSBuildProjectDirectory)\..\..\..\yttrium12\yttrium12.dll</YTTRIUM12_DLL_x64>
   </PropertyGroup>
   <Target Name="StageYttrium12Dll" BeforeTargets="PrepareForBuild" DependsOnTargets="UpdateInxFile" Condition="'$(Platform)' == 'x64' AND Exists('$(MESA_PREFIX_x64)\bin\viogpu_d3d10.dll')">
-    <Error Condition="!Exists('$(YTTRIUM12_DLL_x64)')" Text="Missing x64 Yttrium12 payload: $(YTTRIUM12_DLL_x64). Build yttrium12 first and set YTTRIUM12_DLL_x64." />
-    <MakeDir Directories="$(MesaStageDir)x64" />
-    <Copy SourceFiles="$(YTTRIUM12_DLL_x64)" DestinationFiles="$(MesaStageDir)x64\yttrium12_x64.dll" />
+    <Error Condition="'$(YTTRIUM12_DLL_x64)' != '' AND !Exists('$(YTTRIUM12_DLL_x64)')" Text="Missing x64 Yttrium12 payload: $(YTTRIUM12_DLL_x64). Build yttrium12 first and set YTTRIUM12_DLL_x64." />
+    <MakeDir Condition="'$(YTTRIUM12_DLL_x64)' != ''" Directories="$(MesaStageDir)x64" />
+    <Copy Condition="'$(YTTRIUM12_DLL_x64)' != ''" SourceFiles="$(YTTRIUM12_DLL_x64)" DestinationFiles="$(MesaStageDir)x64\yttrium12_x64.dll" />
+    <Delete Condition="'$(YTTRIUM12_DLL_x64)' == ''" Files="$(MesaStageDir)x64\yttrium12_x64.dll" />
+    <!-- WDK packaging copies incrementally, so remove a previous opt-in payload. -->
+    <Delete Condition="'$(YTTRIUM12_DLL_x64)' == '' AND '$(PackageDir)' != ''" Files="$(PackageDir)x64\yttrium12_x64.dll" />
   </Target>
   <Target Name="StageMesaDlls" BeforeTargets="PrepareForBuild">
     <MakeDir Condition="Exists('$(MESA_PREFIX_x64)\bin\viogpu_d3d10.dll')" Directories="$(MesaStageDir)x64" />
@@ -513,7 +515,7 @@
     <FilesToPackage Include="$(MesaStageDir)x64\viogpu_d3d10_x64.dll">
       <PackageRelativeDirectory>x64</PackageRelativeDirectory>
     </FilesToPackage>
-    <FilesToPackage Include="$(MesaStageDir)x64\yttrium12_x64.dll">
+    <FilesToPackage Condition="'$(YTTRIUM12_DLL_x64)' != ''" Include="$(MesaStageDir)x64\yttrium12_x64.dll">
       <PackageRelativeDirectory>x64</PackageRelativeDirectory>
     </FilesToPackage>
     <FilesToPackage Include="$(MesaStageDir)x64\viogpu_wgl_x64.dll">
@@ -619,7 +621,7 @@
   </ItemGroup>
   <ItemGroup Condition="'$(Platform)' == 'x64' AND Exists('$(MESA_PREFIX_x64)\bin\viogpu_d3d10.dll')">
     <PackOne_Files Include="$(MesaStageDir)x64\viogpu_d3d10_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
-    <PackOne_Files Include="$(MesaStageDir)x64\yttrium12_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
+    <PackOne_Files Condition="'$(YTTRIUM12_DLL_x64)' != ''" Include="$(MesaStageDir)x64\yttrium12_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)x64\viogpu_wgl_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)x64\libEGL_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)x64\libGLESv1_CM_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
