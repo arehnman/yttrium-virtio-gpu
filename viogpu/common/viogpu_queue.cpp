@@ -1571,6 +1571,10 @@ UINT CtrlQueue::Flush()
 {
     UINT ret = 0;
 
+    // A completion DPC must leave a request for the current flusher, even
+    // when it cannot take ownership. It may have just returned descriptors
+    // after SubmitBuffer observed a full virtqueue.
+    InterlockedExchange(&m_CtrlQueueFlushRequested, 1);
     if (InterlockedCompareExchange(&m_CtrlQueueFlushInProgress, 1, 0) != 0)
     {
         return 0;
@@ -1614,13 +1618,15 @@ UINT CtrlQueue::Flush()
                       __FUNCTION__, ret, queuedBuf, requeues));
 
             ExInterlockedInsertHeadList(&m_CtrlQueueList, &queuedBuf->ctrl_queue_entry, &m_CtrlQueueSpinLock);
-            InterlockedExchange(&m_CtrlQueueFlushInProgress, 0);
-            return ret;
+            // Use the same ownership handoff as the empty-list path. A DPC
+            // may have requested another flush while this buffer was out of
+            // the staging list; returning here would lose that wakeup.
+            break;
         }
 
         InterlockedExchange(&m_CtrlQueueFlushInProgress, 0);
-        // QueueBuffer may have enqueued while this flusher was exiting and
-        // observed m_CtrlQueueFlushInProgress still set.
+        // A producer or completion DPC may have requested another flush
+        // while m_CtrlQueueFlushInProgress was still set.
         if (InterlockedCompareExchange(&m_CtrlQueueFlushRequested, 0, 0) == 0)
         {
             return ret;
