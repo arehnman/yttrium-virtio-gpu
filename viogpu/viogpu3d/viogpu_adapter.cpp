@@ -697,6 +697,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 info->Flags.has_resource_blob =
                    virtio_is_feature_enabled(m_u64HostFeatures, VIRTIO_GPU_F_RESOURCE_BLOB);
                 info->Flags.Reserved = 0;
+                info->Flags.requires_explicit_residency = VIOGPU_WDDM2 ? 1 : 0;
                 info->SupportedCapsetIDs = m_supportedCapsetIDs;
                 return STATUS_SUCCESS;
             }

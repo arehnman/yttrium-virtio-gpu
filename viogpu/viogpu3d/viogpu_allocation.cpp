@@ -870,6 +870,13 @@ NTSTATUS VioGpuAllocation::DxgkCreateAllocation(VioGpuAdapter *adapter, DXGKARG_
     allocationInfo->PreferredSegment.Direction0 = 0;
 
     allocationInfo->Flags.CpuVisible = TRUE;
+#if VIOGPU_WDDM2
+    /* Render and BLT Present still use physical allocation lists. WDDM 2
+     * allocations referenced through those lists must explicitly permit
+     * physical addressing, including blob-backed display resources.
+     */
+    allocationInfo->Flags.AccessedPhysically = TRUE;
+#endif
 
     allocationInfo->HintedBank.Value = 0;
     allocationInfo->MaximumRenamingListLength = 0;

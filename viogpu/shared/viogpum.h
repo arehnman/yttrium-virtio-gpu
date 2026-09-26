@@ -57,7 +57,8 @@ typedef struct _VIOGPU_ADAPTERINFO
         UINT has_host_visible : 1;
         UINT has_resource_assign_uuid : 1;
         UINT has_context_init : 1;
-        UINT Reserved : 26;
+        UINT requires_explicit_residency : 1;
+        UINT Reserved : 25;
     } Flags;
     ULONGLONG SupportedCapsetIDs;
 } VIOGPU_ADAPTERINFO;
