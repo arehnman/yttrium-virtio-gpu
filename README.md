@@ -19,8 +19,7 @@ the complete stack.
 | --- | --- | --- |
 | Windows KMD | This repository | WDDM device, memory, scheduling, and display integration |
 | Mesa UMD | [virtio-win-mesa, `yttrium-experimental`](https://github.com/arehnman/virtio-win-mesa/tree/yttrium-experimental) | Direct3D, Vulkan, and OpenGL user-mode drivers |
-| QEMU | [yttrium-qemu, `yttrium`](https://github.com/arehnman/yttrium-qemu/tree/yttrium) | VirtIO GPU device and nonblocking display integration |
-| virglrenderer | [virglrenderer, `yttrium`](https://github.com/arehnman/virglrenderer/tree/yttrium) | Venus renderer and cross-context resource sharing |
+| QEMU | [yttrium-qemu, `yttrium`](https://github.com/arehnman/yttrium-qemu/tree/yttrium) | VirtIO GPU device and nonblocking display integration + bug fixes |
 | Host bundle | [yttrium-qemu-flatpak](https://github.com/arehnman/yttrium-qemu-flatpak) | Reproducible QEMU and virglrenderer Flatpak build |
 
 ## See Yttrium in action
@@ -64,11 +63,10 @@ That path supports everyday presentation as well as advanced 3D work such as
 programmable shaders, multiple render targets, depth and stencil buffers,
 multisampling, compute workloads, texture compression, and stream output.
 
-The Yttrium graphics driver requires a modified virglrenderer on the host to
-provide cross-context resource sharing. The Flatpak build packages the matching
-QEMU and virglrenderer revisions together. QEMU also carries a small patch that
+The Yttrium graphics driver require a virglrenderer with venus and blob support together with a late version QEMU. The Flatpak build packages the matching
+QEMU 11.1.0 and virglrenderer 1.3.0 revisions together. QEMU also carries a small patch that
 prevents its display path from blocking the Windows guest when the display
-window is hidden or minimized.
+window is hidden or minimized. It should work on distro packaged QEMU and virglrenderer providing they are new enough and built with the required options.
 
 ## Project status
 
