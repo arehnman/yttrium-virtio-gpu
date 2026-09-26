@@ -106,6 +106,12 @@ VioGpu3DDdiGetNodeMetadata(_In_ CONST HANDLE hAdapter,
 #define VIOGPU_WDDM2 1
 #endif
 
+// WDDM 2 uses separate logical rendering and paging nodes. Both use the
+// virtio control queue; DMA completion is tracked per node, not per queue.
+static const UINT VIOGPU_RENDER_NODE = 0;
+static const UINT VIOGPU_PAGING_NODE = VIOGPU_WDDM2 ? 1 : 0;
+static const UINT VIOGPU_EXECUTION_NODE_COUNT = VIOGPU_WDDM2 ? 2 : 1;
+
 #if VIOGPU_WDDM2
 
 // The current page-table format stores the DDI entries verbatim.

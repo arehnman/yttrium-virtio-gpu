@@ -793,7 +793,8 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 pDriverCaps->PreemptionCaps.ComputePreemptionGranularity =
                     D3DKMDT_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY;
 
-                pDriverCaps->GpuEngineTopology.NbAsymetricProcessingNodes = 1;
+                pDriverCaps->GpuEngineTopology.NbAsymetricProcessingNodes =
+                    VIOGPU_EXECUTION_NODE_COUNT;
 
                 pDriverCaps->SupportSmoothRotation = FALSE;
                 pDriverCaps->SupportNonVGA = IsVgaDevice();
@@ -1061,10 +1062,15 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
         case DXGKQAITYPE_PHYSICALADAPTERCAPS:
             {
                 /*
-                 * One execution node, which is the 3D engine QUERYSEGMENT and
-                 * GetNodeMetadata already describe, and paging runs on it too
-                 * because there is no separate copy engine behind a virtio
-                 * device.
+                 * Keep paging on its own logical node. Windows 10's
+                 * dxgmms2 10.0.19041.6456 single-engine selection fast path
+                 * only visits node 0, overlooking the OS's additional software
+                 * synchronization node. DWM fence packets then accumulate and
+                 * StopDevice hangs in VidSchFlushAdapter before calling us.
+                 * Two execution nodes select the general scheduler path, which
+                 * drains that software node as well. This changes scheduling
+                 * topology, not the shared virtio transport or completion
+                 * rules; it does not claim a separate hardware copy engine.
                  */
                 /*
                  * dxgkrnl sizes this buffer for the DDI version the driver
@@ -1092,8 +1098,8 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 DXGK_PHYSICALADAPTERCAPS *pCaps =
                     (DXGK_PHYSICALADAPTERCAPS *)pQueryAdapterInfo->pOutputData;
 
-                pCaps->NumExecutionNodes = 1;
-                pCaps->PagingNodeIndex = 0;
+                pCaps->NumExecutionNodes = VIOGPU_EXECUTION_NODE_COUNT;
+                pCaps->PagingNodeIndex = VIOGPU_PAGING_NODE;
 
                 /*
                  * Not the driver's own object, and not something dxgkrnl fills
@@ -1117,7 +1123,9 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 RtlZeroMemory(&pCaps->Flags, sizeof(pCaps->Flags));
                 pCaps->Flags.GpuMmuSupported = 1;
 
-                DbgPrint(TRACE_LEVEL_ERROR, ("%s one execution node\n", __FUNCTION__));
+                DbgPrint(TRACE_LEVEL_ERROR,
+                         ("%s execution nodes=%u render=%u paging=%u\n", __FUNCTION__,
+                          VIOGPU_EXECUTION_NODE_COUNT, VIOGPU_RENDER_NODE, VIOGPU_PAGING_NODE));
                 return STATUS_SUCCESS;
             }
 
@@ -1130,7 +1138,8 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                  * full 64 bits of the software timestamps the driver already
                  * keeps.
                  */
-                if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGKARG_HISTORYBUFFERPRECISION))
+                if (pQueryAdapterInfo->OutputDataSize <
+                    sizeof(DXGKARG_HISTORYBUFFERPRECISION) * VIOGPU_EXECUTION_NODE_COUNT)
                 {
                     return STATUS_BUFFER_TOO_SMALL;
                 }
@@ -1138,10 +1147,13 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                 DXGKARG_HISTORYBUFFERPRECISION *pPrecision =
                     (DXGKARG_HISTORYBUFFERPRECISION *)pQueryAdapterInfo->pOutputData;
 
-                pPrecision->PrecisionBits = 64;
+                // The response contains one entry per execution node.
+                for (UINT node = 0; node < VIOGPU_EXECUTION_NODE_COUNT; ++node)
+                    pPrecision[node].PrecisionBits = 64;
 
                 DbgPrint(TRACE_LEVEL_ERROR,
-                         ("%s history buffer precision 64 bits\n", __FUNCTION__));
+                         ("%s history buffer precision 64 bits for %u nodes\n",
+                          __FUNCTION__, VIOGPU_EXECUTION_NODE_COUNT));
                 return STATUS_SUCCESS;
             }
 

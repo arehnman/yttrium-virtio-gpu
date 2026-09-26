@@ -608,9 +608,16 @@ VioGpu3DDdiGetNodeMetadata(_In_ CONST HANDLE hAdapter,
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<---> %s\n", __FUNCTION__));
 
     UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(NodeOrdinal);
 
-    pGetNodeMetadata->EngineType = DXGK_ENGINE_TYPE_3D;
+    if (NodeOrdinal >= VIOGPU_EXECUTION_NODE_COUNT)
+        return STATUS_INVALID_PARAMETER;
+
+    pGetNodeMetadata->EngineType = NodeOrdinal == VIOGPU_RENDER_NODE
+        ? DXGK_ENGINE_TYPE_3D : DXGK_ENGINE_TYPE_OTHER;
+    const WCHAR pagingName[] = L"VirtIO paging";
+    RtlZeroMemory(pGetNodeMetadata->FriendlyName, sizeof(pGetNodeMetadata->FriendlyName));
+    if (NodeOrdinal != VIOGPU_RENDER_NODE)
+        RtlCopyMemory(pGetNodeMetadata->FriendlyName, pagingName, sizeof(pagingName));
     pGetNodeMetadata->Flags.Value = 0;
 
     return STATUS_SUCCESS;
@@ -1012,6 +1019,9 @@ VioGpu3DDdiCreateContext(_In_ CONST HANDLE hDevice, _Inout_ DXGKARG_CREATECONTEX
     PAGED_CODE();
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<---> %s\n", __FUNCTION__));
+
+    if (pCreateContext->NodeOrdinal >= VIOGPU_EXECUTION_NODE_COUNT)
+        return STATUS_INVALID_PARAMETER;
 
 #if VIOGPU_WDDM2
     /* The current UMD uses physical submissions. Reject incompatible virtual
