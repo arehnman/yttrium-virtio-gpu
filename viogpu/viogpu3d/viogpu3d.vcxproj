@@ -610,13 +610,14 @@
   </ItemGroup>
   <ItemGroup Condition="('$(Platform)' == 'Win32' AND Exists('$(MESA_PREFIX_x86)\bin\viogpu_d3d10.dll')) OR ('$(Platform)' == 'x64' AND Exists('$(MESA_PREFIX_x64)\bin\viogpu_d3d10.dll')) OR ('$(Platform)' == 'ARM64' AND Exists('$(MESA_PREFIX_ARM64)\bin\viogpu_d3d10.dll'))">
     <Inf Include="viogpu3d.inx" />
-  </ItemGroup>
-  <!--  <ItemGroup Condition="'$(BUILD_RESOLUTIONS_USERMODE)'!=''"> -->
-  <ItemGroup Condition="'$(Platform)' == 'x64' AND Exists('$(MESA_PREFIX_x64)\bin\viogpu_d3d10.dll')">
+    <FilesToPackage Include="..\viogpuap\$(OutDir)viogpuap.exe" />
+    <FilesToPackage Include="..\viogpusc\$(OutDir)vgpusrv.exe" />
     <PackOne_Files Include="..\viogpuap\$(OutDir)viogpuap.exe" />
     <PackOne_Files Include="..\viogpuap\$(OutDir)viogpuap.pdb" />
     <PackOne_Files Include="..\viogpusc\$(OutDir)vgpusrv.exe" />
     <PackOne_Files Include="..\viogpusc\$(OutDir)vgpusrv.pdb" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Platform)' == 'x64' AND Exists('$(MESA_PREFIX_x64)\bin\viogpu_d3d10.dll')">
     <PackOne_Files Include="$(MesaStageDir)x64\viogpu_d3d10_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)x64\yttrium12_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)x64\viogpu_wgl_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
@@ -630,10 +631,6 @@
     <PackOne_Files Include="$(ProjectDir)icd\virtio_icd.x86_64.json"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
   </ItemGroup>
   <ItemGroup Condition="'$(Platform)' == 'ARM64' AND Exists('$(MESA_PREFIX_ARM64)\bin\viogpu_d3d10.dll')">
-    <PackOne_Files Include="..\viogpuap\$(OutDir)viogpuap.exe" />
-    <PackOne_Files Include="..\viogpuap\$(OutDir)viogpuap.pdb" />
-    <PackOne_Files Include="..\viogpusc\$(OutDir)vgpusrv.exe" />
-    <PackOne_Files Include="..\viogpusc\$(OutDir)vgpusrv.pdb" />
     <PackOne_Files Include="$(MesaStageDir)arm64\viogpu_d3d10_arm64.dll"><PackOne_Subdir>arm64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)arm64\viogpu_wgl_arm64.dll"><PackOne_Subdir>arm64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)arm64\libEGL_arm64.dll"><PackOne_Subdir>arm64</PackOne_Subdir></PackOne_Files>

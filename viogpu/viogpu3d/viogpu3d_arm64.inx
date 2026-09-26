@@ -17,6 +17,7 @@ PnpLockdown     = 1
 
 [DestinationDirs]
 VioGpu3D_Files.Driver = 13 ; driver store
+VioGpu3D_Files.Resolution = 13 ; keep the service and its helper together
 VioGpu3D_Files.Usermode = 11 ; system32
 VioGpu3D_Files.Vulkan = 11 ; system32
 
@@ -25,6 +26,8 @@ VioGpu3D_Files.Vulkan = 11 ; system32
 
 [SourceDisksFiles]
 viogpu3d.sys = 1,,f
+vgpusrv.exe = 1
+viogpuap.exe = 1
 viogpu_d3d10_arm64.dll = 1,arm64,
 viogpu_wgl_arm64.dll = 1,arm64,
 libEGL_arm64.dll = 1,arm64,
@@ -42,6 +45,10 @@ virtio_icd.aarch64.json = 1,arm64,
 [VioGpu3D_Files.Driver]
 viogpu3d.sys,,,2
 
+[VioGpu3D_Files.Resolution]
+vgpusrv.exe,,,0
+viogpuap.exe,,,0
+
 [VioGpu3D_Files.Usermode]
 viogpu_d3d10.dll,viogpu_d3d10_arm64.dll,,0
 viogpu_wgl.dll,viogpu_wgl_arm64.dll,,0
@@ -57,11 +64,12 @@ virtio_icd.aarch64.json,,,0
 [VioGpu3D_Inst.NT]
 Include=msdv.inf
 FeatureScore=F9
-CopyFiles=VioGpu3D_Files.Driver, VioGpu3D_Files.Usermode, VioGpu3D_Files.Vulkan
+CopyFiles=VioGpu3D_Files.Driver, VioGpu3D_Files.Resolution, VioGpu3D_Files.Usermode, VioGpu3D_Files.Vulkan
 AddReg=VioGpu3D_DeviceSettings
 
 [VioGpu3D_Inst.NT.Services]
 AddService = VioGpu3D,0x00000002,VioGpu3D_Service_Inst, VioGpu3D_EventLog_Inst
+AddService = vgpusrv,0x00000800,VioGpu3D_Resolution_Service_Inst ; SPSVCINST_STARTSERVICE
 
 [VioGpu3D_Inst.NT.HW]
 AddReg = VioGpu3D_PCI_MSIX
@@ -70,6 +78,13 @@ ServiceType = %SERVICE_KERNEL_DRIVER%
 StartType = %SERVICE_DEMAND_START%
 ErrorControl = %SERVICE_ERROR_IGNORE%
 ServiceBinary = %13%\viogpu3d.sys
+
+[VioGpu3D_Resolution_Service_Inst]
+DisplayName = %VioGpu3D.ResolutionServiceDesc%
+ServiceType = %SERVICE_WIN32_OWN_PROCESS%
+StartType = %SERVICE_AUTO_START%
+ErrorControl = %SERVICE_ERROR_NORMAL%
+ServiceBinary = %13%\vgpusrv.exe
 
 [VioGpu3D_EventLog_Inst]
 AddReg = VioGpu3D_EventLog_Inst.AddReg
@@ -108,6 +123,7 @@ HKR, "Interrupt Management\MessageSignaledInterruptProperties", MessageNumberLim
 ;  *******Localizable Strings*******
 diskId1 = "Hardsoft VirtIO GPU controller Installation Disk"
 VioGpu3D.DeviceDesc = "Hardsoft VirtIO GPU 3D controller"
+VioGpu3D.ResolutionServiceDesc = "VioGpu Resolution Service"
 HARDSOFT = "Hardsoft Swed."
 
 ;  *******Non Localizable Strings*******
@@ -118,6 +134,7 @@ SERVICE_DEMAND_START = 0x3
 SERVICE_DISABLED = 0x4
 
 SERVICE_KERNEL_DRIVER = 0x1
+SERVICE_WIN32_OWN_PROCESS = 0x10
 SERVICE_ERROR_IGNORE = 0x0
 SERVICE_ERROR_NORMAL = 0x1
 SERVICE_ERROR_SEVERE = 0x2
