@@ -154,9 +154,7 @@ The optional `org.qemu.yttrium.Debug.flatpak` release asset contains host debug
 symbols. Developers who want to build the host stack can use the
 [Flatpak source repository](https://github.com/arehnman/yttrium-qemu-flatpak).
 
-Recent official QEMU builds can also run Yttrium, but they must use a locally
-built copy of the
-[Yttrium virglrenderer](https://github.com/arehnman/virglrenderer/tree/yttrium).
+Recent official QEMU builds can also run Yttrium.
 Unlike the Yttrium Flatpak, official QEMU builds do not include the display
 progress patch. An invisible, hidden, or minimized display window may therefore
 stall the guest; keep the display visible while running graphics workloads.
