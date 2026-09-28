@@ -132,6 +132,7 @@ class VioGpuMemSegment
   private:
     BOOLEAN m_bSystemMemory;
     BOOLEAN m_bMapped;
+    BOOLEAN m_bPagesLocked;
     PSCATTER_GATHER_LIST m_pSGList;
     PVOID m_pVAddr;
     PMDL m_pMdl;
