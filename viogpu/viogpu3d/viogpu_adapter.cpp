@@ -335,6 +335,7 @@ NTSTATUS VioGpuAdapter::StartDevice(_In_ DXGK_START_INFO *pDxgkStartInfo,
     PAGED_CODE();
 
     NTSTATUS Status;
+    BOOLEAN vidpnStartAttempted = FALSE;
     VIOGPU_ASSERT(pDxgkStartInfo != NULL);
     VIOGPU_ASSERT(pDxgkInterface != NULL);
     VIOGPU_ASSERT(pNumberOfViews != NULL);
@@ -365,7 +366,7 @@ NTSTATUS VioGpuAdapter::StartDevice(_In_ DXGK_START_INFO *pDxgkStartInfo,
     if (!NT_SUCCESS(Status))
     {
         DbgPrint(TRACE_LEVEL_ERROR, ("HWInit failed with status 0x%X\n", Status));
-        return Status;
+        goto StartDeviceFailed;
     }
 
 #if VIOGPU_WDDM2
@@ -378,7 +379,7 @@ NTSTATUS VioGpuAdapter::StartDevice(_In_ DXGK_START_INFO *pDxgkStartInfo,
     {
         DbgPrint(TRACE_LEVEL_ERROR,
                  ("AllocatePageTableSegment failed with status 0x%X\n", Status));
-        return Status;
+        goto StartDeviceFailed;
     }
 #endif
 
@@ -386,21 +387,43 @@ NTSTATUS VioGpuAdapter::StartDevice(_In_ DXGK_START_INFO *pDxgkStartInfo,
     if (!NT_SUCCESS(Status))
     {
         VIOGPU_LOG_ASSERTION1("RegisterHWInfo failed with status 0x%X\n", Status);
-        return Status;
+        goto StartDeviceFailed;
     }
 
+    vidpnStartAttempted = TRUE;
     Status = vidpn.Start(pNumberOfViews, pNumberOfChildren);
     if (!NT_SUCCESS(Status))
     {
         DbgPrint(TRACE_LEVEL_FATAL, ("VioGpuaVidPN::Start failed with status 0x%X\n", Status));
         VioGpuDbgBreak();
-        return STATUS_UNSUCCESSFUL;
+        goto StartDeviceFailed;
     }
 
     m_Flags.DriverStarted = TRUE;
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
     return STATUS_SUCCESS;
+
+StartDeviceFailed:
+    // HWInit can publish HardwareInit before later initialization fails. Unwind
+    // while StartDevice still owns the live dxgkrnl interface and interrupt
+    // synchronization; RemoveDevice may be called after interrupts disconnect.
+    // Preserve the original failure, including the precise VidPN start status.
+    m_Flags.DriverStarted = FALSE;
+    vidpn.StopVsyncTimer();
+    StopWorkThread();
+    if (vidpnStartAttempted)
+    {
+        // Partial VidPN setup may own a frame object. Its host commands require
+        // the control queue, so stop it before closing adapter queue storage.
+        vidpn.Stop();
+    }
+    VioGpuAdapterClose();
+    HWClose();
+#if VIOGPU_WDDM2
+    FreePageTableSegment();
+#endif
+    return Status;
 }
 
 NTSTATUS VioGpuAdapter::StopDevice(VOID)
@@ -2920,15 +2943,12 @@ NTSTATUS VioGpuAdapter::HWInit(PCM_RESOURCE_LIST pResList)
         DbgPrint(TRACE_LEVEL_FATAL, ("%s failed to allocate FB memory segment\n", __FUNCTION__));
         status = STATUS_INSUFFICIENT_RESOURCES;
         VioGpuDbgBreak();
-        VioGpuAdapterClose();
         return status;
     }
 
     status = StartWorkThread();
     if (!NT_SUCCESS(status))
     {
-        frameSegment.Close();
-        VioGpuAdapterClose();
         return status;
     }
 
