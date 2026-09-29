@@ -56,6 +56,10 @@ class VioGpuDevice
     {
         return m_owner_pid;
     }
+    VIOGPU_CLOCK_PUBLISHER *GetNativeClockPublisher()
+    {
+        return &m_clockPublisher;
+    }
 
   private:
     VioGpuAdapter *m_pAdapter;
@@ -64,6 +68,7 @@ class VioGpuDevice
     bool m_context_created;
     PEPROCESS m_owner_process;
     HANDLE m_owner_pid;
+    VIOGPU_CLOCK_PUBLISHER m_clockPublisher;
 };
 
 class VioGpuDeviceAllocation

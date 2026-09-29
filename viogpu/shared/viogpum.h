@@ -30,6 +30,7 @@
 #pragma once
 
 #include <d3dkmthk.h>
+#include "viogpu_clock.h"
 
 #pragma pack(1)
 typedef struct _VIOGPU_BOX

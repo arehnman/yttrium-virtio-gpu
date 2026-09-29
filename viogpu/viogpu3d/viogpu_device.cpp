@@ -24,11 +24,15 @@ VioGpuDevice::VioGpuDevice(VioGpuAdapter *pAdapter)
     m_id = pAdapter->ctxIdr.GetId();
     m_capset_id = 0;
     m_context_created = false;
+    m_clockPublisher.Generation = 0;
 }
 
 VioGpuDevice::~VioGpuDevice()
 {
     PAGED_CODE();
+#if VIOGPU_WDDM2
+    m_pAdapter->ReleaseNativeClock(this);
+#endif
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--> %s\n", __FUNCTION__));
 
     if (m_context_created)
@@ -68,6 +72,9 @@ static NTSTATUS VioGpuEmitPresentNop(DXGKARG_PRESENT *pPresent)
 NTSTATUS VioGpuDevice::Init(VIOGPU_CTX_INIT_REQ *pOptions)
 {
     PAGED_CODE();
+#if VIOGPU_WDDM2
+    m_pAdapter->ReleaseNativeClock(this);
+#endif
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--> %s", __FUNCTION__));
 
     UINT context_init = 0;

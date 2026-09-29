@@ -109,6 +109,11 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
     VioGpuMemSegment m_CursorSegment;
 
 #if VIOGPU_WDDM2
+    KSPIN_LOCK m_clockLock;
+    VIOGPU_CLOCK_CACHE m_clockCache;
+    volatile LONG m_clockResetRequested;
+    LONG m_clockResetObserved;
+    void CheckNativeClockReset(void); /* Caller holds m_clockLock. */
     /* Contiguous system memory carved out to back the page table segment.
      * Under GpuMmu, VidMm puts page tables in a memory segment it can also
      * map for the CPU, and a virtio GPU has no VRAM to offer for that, so the
@@ -142,6 +147,10 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
   public:
     VioGpuAdapter(_In_ DEVICE_OBJECT *pPhysicalDeviceObject);
     ~VioGpuAdapter(void);
+#if VIOGPU_WDDM2
+    void ReleaseNativeClock(VioGpuDevice *owner);
+    NTSTATUS ReadNativeClock(VIOGPU_CLOCK_SAMPLE *sample);
+#endif
 #pragma code_seg(push)
 #pragma code_seg()
 
@@ -285,6 +294,8 @@ class VioGpuAdapter : IVioGpuPCI, public IVioGpuQueueSync
 #if VIOGPU_WDDM2
     NTSTATUS AllocatePageTableSegment(void);
     void FreePageTableSegment(void);
+    NTSTATUS NativeClockEscape(const DXGKARG_ESCAPE *escape);
+    void ResetNativeClock(void);
 #endif
 
     ULONG GetInstanceId(void)

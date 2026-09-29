@@ -192,6 +192,10 @@ VioGpuAdapter::VioGpuAdapter(_In_ DEVICE_OBJECT *pPhysicalDeviceObject)
     m_u32NumScanouts = 0;
     m_supportedCapsetIDs = 0;
 #if VIOGPU_WDDM2
+    KeInitializeSpinLock(&m_clockLock);
+    RtlZeroMemory(&m_clockCache, sizeof(m_clockCache));
+    VioGpuClockReset(&m_clockCache);
+    m_clockResetRequested = m_clockResetObserved = 0;
     m_pPageTableSegment = NULL;
     m_PageTableSegmentPA.QuadPart = 0;
     m_PageTableSegmentSize = 0;
@@ -1367,6 +1371,12 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
 
     switch (pVioGpuEscape->Type)
     {
+        case VIOGPU_NATIVE_CLOCK:
+#if VIOGPU_WDDM2
+            return NativeClockEscape(pEscape);
+#else
+            return STATUS_NOT_SUPPORTED;
+#endif
         case VIOGPU_QUERY_TIMELINE_SUBMIT:
             if (pVioGpuEscape->DataLength < sizeof(UINT))
                 return STATUS_INVALID_BUFFER_SIZE;
@@ -2247,6 +2257,9 @@ VOID VioGpuAdapter::DpcRoutine(VOID)
 
 VOID VioGpuAdapter::ResetDevice(VOID)
 {
+#if VIOGPU_WDDM2
+    ResetNativeClock();
+#endif
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<---> %s\n", __FUNCTION__));
 }
 
@@ -2592,6 +2605,9 @@ NTSTATUS VioGpuAdapter::VioGpuAdapterInit()
 void VioGpuAdapter::VioGpuAdapterClose()
 {
     PAGED_CODE();
+#if VIOGPU_WDDM2
+    ResetNativeClock();
+#endif
     DbgPrint(TRACE_LEVEL_FATAL, ("---> %s\n", __FUNCTION__));
     vidpn.StopVsyncTimer();
     StopWorkThread();
@@ -3364,3 +3380,5 @@ VioGpuResource *VioGpuAdapter::ResourceFromHandle(D3DKMT_HANDLE handle)
     getHandleData.Flags.DeviceSpecific = 0;
     return reinterpret_cast<VioGpuResource *>(m_DxgkInterface.DxgkCbGetHandleData(&getHandleData));
 }
+
+#include "viogpu_native_clock.h"

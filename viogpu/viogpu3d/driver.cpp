@@ -509,11 +509,10 @@ VioGpu3DDdiSetRootPageTable(_In_ CONST HANDLE hAdapter,
  * DDI 0x4002, below the threshold, which is why the same driver starts
  * fine there.
  *
- * There is no GPU clock to read: work is timed on the CPU side and handed
- * to the host, so the performance counter is the only clock this device
- * has.  Reporting it as both timebases is the truthful answer here - the
- * two counters then advance together, which is what a shared timebase
- * means, rather than inventing a GPU frequency.
+ * Native Vulkan queries use the host GPU counter, not guest transport QPC.
+ * Yttrium12 primes and refreshes bounded correlated samples at passive level.
+ * Here only copy the cached real GPU value and the guest bracket midpoint.
+ * Missing/expired samples fail; never substitute QPC or extrapolate GPU ticks.
  *
  * Callable at DISPATCH_LEVEL, so this must not be pageable.
  */
@@ -527,23 +526,19 @@ VioGpu3DDdiCalibrateGpuClock(_In_ CONST HANDLE hAdapter,
                              UINT32 EngineOrdinal,
                              _Out_ DXGKARG_CALIBRATEGPUCLOCK *pClockCalibration)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(NodeOrdinal);
-    UNREFERENCED_PARAMETER(EngineOrdinal);
-
-    if (pClockCalibration == NULL)
+    if (pClockCalibration == NULL || hAdapter == NULL)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    LARGE_INTEGER Frequency;
-    LARGE_INTEGER Counter = KeQueryPerformanceCounter(&Frequency);
-
     RtlZeroMemory(pClockCalibration, sizeof(*pClockCalibration));
-    pClockCalibration->GpuFrequency = (ULONGLONG)Frequency.QuadPart;
-    pClockCalibration->GpuClockCounter = (ULONGLONG)Counter.QuadPart;
-    pClockCalibration->CpuClockCounter = (ULONGLONG)Counter.QuadPart;
-
+    if (NodeOrdinal != 0 || EngineOrdinal != 0) return STATUS_NOT_SUPPORTED;
+    VIOGPU_CLOCK_SAMPLE sample;
+    NTSTATUS status = static_cast<VioGpuAdapter *>(hAdapter)->ReadNativeClock(&sample);
+    if (!NT_SUCCESS(status)) return status;
+    pClockCalibration->GpuFrequency = sample.GpuFrequency;
+    pClockCalibration->GpuClockCounter = sample.GpuTimestamp;
+    pClockCalibration->CpuClockCounter = sample.CpuBefore + (sample.CpuAfter - sample.CpuBefore) / 2;
     return STATUS_SUCCESS;
 }
 
