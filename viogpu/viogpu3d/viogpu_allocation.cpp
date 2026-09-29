@@ -927,12 +927,19 @@ NTSTATUS VioGpuAllocation::MapApertureSegment(DXGKARG_BUILDPAGINGBUFFER *pBuildP
     PAGED_CODE();
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<---> %s res_id=%d\n", __FUNCTION__, m_Id));
 
-    size_t pageCount = pBuildPagingBuffer->MapApertureSegment.NumberOfPages;
-    size_t mdlPageOffset = pBuildPagingBuffer->MapApertureSegment.MdlOffset;
-
-    MDL *pMdl = pBuildPagingBuffer->MapApertureSegment.pMdl;
-
-    AttachBacking(pMdl, pageCount, mdlPageOffset);
+    /* HOST3D blobs already own renderer storage. VidMm's aperture MDL is
+     * not that storage and must not be attached as a guest shadow buffer.
+     * Guest backing belongs to non-blob, GUEST and HOST3D_GUEST resources.
+     * CPU access to HOST3D continues through RESOURCE_MAP_BLOB and the BAR;
+     * the VidMm aperture address below is separate allocation bookkeeping.
+     */
+    if (!m_is_blob || m_blob_mem != VIRTIO_GPU_BLOB_MEM_HOST3D)
+    {
+        size_t pageCount = pBuildPagingBuffer->MapApertureSegment.NumberOfPages;
+        size_t mdlPageOffset = pBuildPagingBuffer->MapApertureSegment.MdlOffset;
+        MDL *pMdl = pBuildPagingBuffer->MapApertureSegment.pMdl;
+        AttachBacking(pMdl, pageCount, mdlPageOffset);
+    }
     SetDxPhysicalAddress(pBuildPagingBuffer->MapApertureSegment.OffsetInPages * PAGE_SIZE);
 
     return STATUS_SUCCESS;
@@ -944,7 +951,10 @@ NTSTATUS VioGpuAllocation::UnmapApertureSegment(DXGKARG_BUILDPAGINGBUFFER *pBuil
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<---> %s res_id=%d\n", __FUNCTION__, m_Id));
 
     UNREFERENCED_PARAMETER(pBuildPagingBuffer);
-    DetachBacking();
+    if (!m_is_blob || m_blob_mem != VIRTIO_GPU_BLOB_MEM_HOST3D)
+    {
+        DetachBacking();
+    }
     return STATUS_SUCCESS;
 }
 
