@@ -8,6 +8,7 @@
 #include "helper.h"
 #include "virgl_hw.h"
 #include "viogpum.h"
+#include "viogpu_blob_user_view.h"
 
 class VioGpuAdapter;
 class VioGpuDevice;
@@ -137,6 +138,9 @@ class VioGpuAllocation
         LIST_ENTRY ListEntry;
         PEPROCESS Process;
         HANDLE ProcessId;
+        VIOGPU_BLOB_USER_VIEW View;
+        /* Immutable while this allocation record is published. The registry
+         * clears View.UserVa at exit; keep the response address separate. */
         PVOID UserVa;
         ULONGLONG Size;
         ULONG MapInfo;
@@ -168,7 +172,7 @@ class VioGpuAllocation
     volatile LONG m_blob_create_state;
     KEVENT m_blob_create_complete_event;
     EX_RUNDOWN_REF m_blob_create_rundown;
-    FAST_MUTEX m_blob_map_mutex;
+    KMUTEX m_blob_map_mutex;
     LIST_ENTRY m_blob_map_list;
     ULONG m_blob_map_user_refs;
     volatile LONG m_resource_created;

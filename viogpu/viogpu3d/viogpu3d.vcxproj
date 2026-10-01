@@ -437,6 +437,7 @@
     <ClInclude Include="viogpu_device.h" />
     <ClInclude Include="trace.h" />
     <ClInclude Include="viogpu_allocation.h" />
+    <ClInclude Include="viogpu_blob_user_view.h" />
     <ClInclude Include="viogpu_adapter.h" />
     <ClInclude Include="viogpu_shmem_allocator.h" />
     <ClInclude Include="resource.h" />
@@ -451,6 +452,7 @@
     <ClCompile Include="viogpu_command.cpp" />
     <ClCompile Include="viogpu_device.cpp" />
     <ClCompile Include="viogpu_allocation.cpp" />
+    <ClCompile Include="viogpu_blob_user_view.cpp" />
     <ClCompile Include="viogpu_adapter.cpp" />
     <ClCompile Include="viogpu_shmem_allocator.cpp" />
     <ClCompile Include="..\common\baseobj.cpp" />

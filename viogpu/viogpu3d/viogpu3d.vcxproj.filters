@@ -46,6 +46,9 @@
     <ClCompile Include="viogpu_allocation.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="viogpu_blob_user_view.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="viogpu_device.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -88,6 +91,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="viogpu_allocation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="viogpu_blob_user_view.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="viogpu_device.h">

@@ -4,6 +4,7 @@
  * 
  */
 
+#include <ntifs.h>
 #include "baseobj.h"
 #include "bitops.h"
 #include "viogpum.h"
@@ -12,9 +13,6 @@
 #include "viogpu_device.h"
 #include "virgl_hw.h"
 #include "viogpu_format.h"
-
-extern "C" NTSYSAPI VOID NTAPI KeAttachProcess(_Inout_ PRKPROCESS Process);
-extern "C" NTSYSAPI VOID NTAPI KeDetachProcess(VOID);
 
 static MEMORY_CACHING_TYPE VioGpuCacheTypeFromMapInfo(ULONG map_info)
 {
@@ -74,6 +72,7 @@ void VioGpuAllocation::BlobCreateCompleteCB(void *ctx_void)
         InterlockedExchange(&alloc->m_blob_create_state, 0);
     }
 
+
     KeSetEvent(&alloc->m_blob_create_complete_event, IO_NO_INCREMENT, FALSE);
     if (ctx->user_cb) {
         ctx->user_cb(ctx->user_ctx);
@@ -112,7 +111,7 @@ VioGpuAllocation::VioGpuAllocation(VioGpuAdapter *adapter, VIOGPU_CREATE_ALLOCAT
     m_blob_create_state = 0;
     KeInitializeEvent(&m_blob_create_complete_event, NotificationEvent, TRUE);
     ExInitializeRundownProtection(&m_blob_create_rundown);
-    ExInitializeFastMutex(&m_blob_map_mutex);
+    KeInitializeMutex(&m_blob_map_mutex, 0);
     InitializeListHead(&m_blob_map_list);
     m_blob_map_user_refs = 0;
     m_resource_created = 0;
@@ -289,7 +288,7 @@ VioGpuAllocation::~VioGpuAllocation(void)
     ASSERT(m_busy == 0);
     ExWaitForRundownProtectionRelease(&m_blob_create_rundown);
 
-    ExAcquireFastMutex(&m_blob_map_mutex);
+    KeWaitForSingleObject(&m_blob_map_mutex, Executive, KernelMode, FALSE, NULL);
     if (!IsListEmpty(&m_blob_map_list))
     {
         DbgPrint(TRACE_LEVEL_WARNING,
@@ -321,10 +320,11 @@ VioGpuAllocation::~VioGpuAllocation(void)
                       map->UserVa,
                       map->ProcessId,
                       map->Process));
-            m_adapter->GetDxgkInterface()->DxgkCbUnmapMemory(
-                m_adapter->GetDxgkInterface()->DeviceHandle, map->UserVa);
-            map->UserVa = NULL;
         }
+        /* Even an exit-revoked view must retire under the registry gate
+         * before its containing allocation record can be freed. */
+        VioGpuUnmapBlobUserView(&map->View);
+        map->UserVa = NULL;
         if (map->Process)
         {
             ObDereferenceObject(map->Process);
@@ -333,7 +333,7 @@ VioGpuAllocation::~VioGpuAllocation(void)
         delete map;
     }
     m_blob_map_user_refs = 0;
-    ExReleaseFastMutex(&m_blob_map_mutex);
+    KeReleaseMutex(&m_blob_map_mutex, FALSE);
 
     const bool resource_created = m_is_blob ? m_blob_created : (m_resource_created != 0);
 
@@ -460,13 +460,13 @@ NTSTATUS VioGpuAllocation::MapForCpuCopy(ULONG ctx_id,
             return STATUS_INVALID_PARAMETER;
         }
 
-        ExAcquireFastMutex(&m_blob_map_mutex);
+        KeWaitForSingleObject(&m_blob_map_mutex, Executive, KernelMode, FALSE, NULL);
         if (!m_blob_mapped)
         {
             if (!m_adapter->ctrlQueue.ResourceMapBlob(m_Id, m_blob_offset,
                                                       &m_blob_map_info))
             {
-                ExReleaseFastMutex(&m_blob_map_mutex);
+                KeReleaseMutex(&m_blob_map_mutex, FALSE);
                 return STATUS_UNSUCCESSFUL;
             }
             m_blob_mapped = true;
@@ -477,7 +477,7 @@ NTSTATUS VioGpuAllocation::MapForCpuCopy(ULONG ctx_id,
             PHYSICAL_ADDRESS shmem_pa = {};
             if (!m_adapter->GetShmemCpuTranslatedAddress(&shmem_pa))
             {
-                ExReleaseFastMutex(&m_blob_map_mutex);
+                KeReleaseMutex(&m_blob_map_mutex, FALSE);
                 return STATUS_NOT_SUPPORTED;
             }
             shmem_pa.QuadPart += m_blob_offset;
@@ -491,7 +491,7 @@ NTSTATUS VioGpuAllocation::MapForCpuCopy(ULONG ctx_id,
             PVOID va = MmMapIoSpace(shmem_pa, (SIZE_T)map_len, cache_type);
             if (!va)
             {
-                ExReleaseFastMutex(&m_blob_map_mutex);
+                KeReleaseMutex(&m_blob_map_mutex, FALSE);
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
@@ -502,7 +502,7 @@ NTSTATUS VioGpuAllocation::MapForCpuCopy(ULONG ctx_id,
         *map_va = m_blob_kernel_va;
         *map_size = m_blob_kernel_map_size;
         *io_mapping = FALSE;
-        ExReleaseFastMutex(&m_blob_map_mutex);
+        KeReleaseMutex(&m_blob_map_mutex, FALSE);
         return STATUS_SUCCESS;
     }
 
@@ -1067,8 +1067,6 @@ NTSTATUS VioGpuAllocation::EscapeResourceMapBlob(VIOGPU_RES_MAP_BLOB_REQ *resMap
 {
     PAGED_CODE();
 
-    DbgPrint(TRACE_LEVEL_VERBOSE, ("<---> %s res_id=0x%x handle=0x%x\n", __FUNCTION__, m_Id, resMap ? resMap->ResHandle : 0));
-
     if (!resMap)
     {
         return STATUS_INVALID_PARAMETER;
@@ -1100,6 +1098,8 @@ NTSTATUS VioGpuAllocation::EscapeResourceMapBlob(VIOGPU_RES_MAP_BLOB_REQ *resMap
         return STATUS_INVALID_PARAMETER;
     }
 
+    if (requested_size > MAXULONG - (PAGE_SIZE - 1))
+        return STATUS_INVALID_PARAMETER;
     const ULONGLONG map_len = ALIGN_UP_BY(requested_size, PAGE_SIZE);
     if (map_len == 0 || map_len > MAXULONG)
     {
@@ -1118,29 +1118,31 @@ NTSTATUS VioGpuAllocation::EscapeResourceMapBlob(VIOGPU_RES_MAP_BLOB_REQ *resMap
         return STATUS_NOT_SUPPORTED;
     }
 
+    PHYSICAL_ADDRESS map_pa = shmem_pa;
+    if (shmem_pa.QuadPart < 0 ||
+        m_blob_offset > (ULONGLONG)MAXLONGLONG - (ULONGLONG)shmem_pa.QuadPart ||
+        map_len > (ULONGLONG)MAXLONGLONG - (ULONGLONG)shmem_pa.QuadPart - m_blob_offset)
+        return STATUS_INVALID_PARAMETER;
+    map_pa.QuadPart += m_blob_offset;
+
     PEPROCESS target_process = NULL;
     HANDLE target_pid = NULL;
     VioGpuGetTargetProcess(device, &target_process, &target_pid);
+    if (target_process != PsGetCurrentProcess() ||
+        PsGetCurrentProcessId() != target_pid)
     {
-        PEPROCESS current_process = PsGetCurrentProcess();
-        HANDLE current_pid = PsGetCurrentProcessId();
-        DbgPrint(TRACE_LEVEL_VERBOSE,
-                 ("%s target_pid=%p current_pid=%p target_process=%p current_process=%p\n",
-                  __FUNCTION__,
-                  target_pid,
-                  current_pid,
-                  target_process,
-                  current_process));
+        DbgPrint(TRACE_LEVEL_ERROR,
+                 ("%s blob user map requires owner context res_id=0x%x owner=%p current=%p\n",
+                  __FUNCTION__, m_Id, target_process, PsGetCurrentProcess()));
+        return STATUS_INVALID_DEVICE_STATE;
     }
-
-    ExAcquireFastMutex(&m_blob_map_mutex);
-    PDXGKRNL_INTERFACE dxgk = m_adapter->GetDxgkInterface();
+    KeWaitForSingleObject(&m_blob_map_mutex, Executive, KernelMode, FALSE, NULL);
     BlobUserMapping *map = FindBlobMappingLocked(target_pid, target_process);
     if (map)
     {
         if (resMap->Size && resMap->Size != map->Size)
         {
-            ExReleaseFastMutex(&m_blob_map_mutex);
+            KeReleaseMutex(&m_blob_map_mutex, FALSE);
             return STATUS_INVALID_PARAMETER;
         }
         map->RefCount++;
@@ -1151,7 +1153,7 @@ NTSTATUS VioGpuAllocation::EscapeResourceMapBlob(VIOGPU_RES_MAP_BLOB_REQ *resMap
         resMap->Size = map->Size;
         resMap->Offset = m_blob_offset;
 
-        ExReleaseFastMutex(&m_blob_map_mutex);
+        KeReleaseMutex(&m_blob_map_mutex, FALSE);
         return STATUS_SUCCESS;
     }
 
@@ -1163,7 +1165,7 @@ NTSTATUS VioGpuAllocation::EscapeResourceMapBlob(VIOGPU_RES_MAP_BLOB_REQ *resMap
     {
         if (!m_adapter->ctrlQueue.ResourceMapBlob(m_Id, m_blob_offset, &m_blob_map_info))
         {
-            ExReleaseFastMutex(&m_blob_map_mutex);
+            KeReleaseMutex(&m_blob_map_mutex, FALSE);
             DbgPrint(TRACE_LEVEL_ERROR,
                      ("<--- %s ResourceMapBlob failed res_id=0x%x offset=0x%llx\n",
                       __FUNCTION__, m_Id, m_blob_offset));
@@ -1192,127 +1194,36 @@ NTSTATUS VioGpuAllocation::EscapeResourceMapBlob(VIOGPU_RES_MAP_BLOB_REQ *resMap
      */
     cache_type = host_cache_type;
 
-    PHYSICAL_ADDRESS map_pa = shmem_pa;
-    map_pa.QuadPart += m_blob_offset;
-    DbgPrint(TRACE_LEVEL_VERBOSE,
-             ("%s map_pa=0x%llx map_len=0x%llx cache_type=0x%x host_cache_type=0x%x shmem_pa=0x%llx shmem_len=0x%llx blob_offset=0x%llx\n",
-              __FUNCTION__,
-              map_pa.QuadPart,
-              map_len,
-              cache_type,
-              host_cache_type,
-              shmem_pa.QuadPart,
-              shmem_len,
-              m_blob_offset));
-    const BOOLEAN in_io_space = FALSE;
-    user_va = NULL;
-    status = dxgk->DxgkCbMapMemory(dxgk->DeviceHandle,
-                                   map_pa,
-                                   (ULONG)map_len,
-                                   in_io_space,
-                                   TRUE,
-                                   cache_type,
-                                   &user_va);
-    bool mapping_valid = NT_SUCCESS(status) && user_va;
+    map = new (NonPagedPoolNx) BlobUserMapping();
+    status = map ? VioGpuMapBlobUserView(&map->View, target_process, map_pa,
+                                       (SIZE_T)map_len, cache_type)
+                 : STATUS_INSUFFICIENT_RESOURCES;
+    user_va = map ? map->View.UserVa : NULL;
 
-#if DBG
-    if (mapping_valid && target_process)
-    {
-        BOOLEAN attached = FALSE;
-        if (target_process != PsGetCurrentProcess())
-        {
-            KeAttachProcess(reinterpret_cast<PRKPROCESS>(target_process));
-            attached = TRUE;
-        }
-
-        BOOLEAN probe_ok = TRUE;
-        __try
-        {
-            // Best-effort debug probe to ensure the mapped VA is readable.
-            volatile const UCHAR first = *(volatile const UCHAR *)user_va;
-            UNREFERENCED_PARAMETER(first);
-            if (map_len > 1)
-            {
-                volatile const UCHAR last = *((volatile const UCHAR *)user_va + (map_len - 1));
-                UNREFERENCED_PARAMETER(last);
-            }
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            probe_ok = FALSE;
-        }
-        mapping_valid = probe_ok;
-        if (!mapping_valid)
-        {
-            DbgPrint(TRACE_LEVEL_ERROR,
-                     ("%s ERROR map probe failed user_va=%p map_len=0x%llx target_pid=%p target_process=%p\n",
-                      __FUNCTION__,
-                      user_va,
-                      map_len,
-                      target_pid,
-                      target_process));
-            VIOGPU_ASSERT_CHK(false);
-        }
-
-        if (attached)
-        {
-            KeDetachProcess();
-        }
-    }
-
-    if (!mapping_valid && user_va)
-    {
-        BOOLEAN attached = FALSE;
-        if (target_process && target_process != PsGetCurrentProcess())
-        {
-            KeAttachProcess(reinterpret_cast<PRKPROCESS>(target_process));
-            attached = TRUE;
-        }
-
-        dxgk->DxgkCbUnmapMemory(dxgk->DeviceHandle, user_va);
-
-        if (attached)
-        {
-            KeDetachProcess();
-        }
-    }
-#endif
-
-    if (!NT_SUCCESS(status) || !user_va || !mapping_valid)
+    if (!NT_SUCCESS(status) || !user_va)
     {
         DbgPrint(TRACE_LEVEL_ERROR,
-                 ("%s ERROR map failed res_id=0x%x status=0x%lx user_va=%p mapping_valid=%d map_pa=0x%llx map_len=0x%llx cache_type=0x%x\n",
+                 ("%s ERROR map failed res_id=0x%x status=0x%lx user_va=%p map_pa=0x%llx map_len=0x%llx cache_type=0x%x\n",
                   __FUNCTION__,
                   m_Id,
                   status,
                   user_va,
-                  mapping_valid ? 1 : 0,
                   map_pa.QuadPart,
                   map_len,
                   cache_type));
+        if (map)
+        {
+            VioGpuUnmapBlobUserView(&map->View);
+            delete map;
+        }
         if (m_blob_map_user_refs == 0 && m_blob_mapped && !m_blob_kernel_va)
         {
             m_adapter->ctrlQueue.ResourceUnmapBlob(m_Id);
             m_blob_mapped = false;
             m_blob_map_info = 0;
         }
-        ExReleaseFastMutex(&m_blob_map_mutex);
+        KeReleaseMutex(&m_blob_map_mutex, FALSE);
         return (!NT_SUCCESS(status)) ? status : STATUS_UNSUCCESSFUL;
-    }
-
-    map = new (NonPagedPoolNx) BlobUserMapping();
-    if (!map)
-    {
-        dxgk->DxgkCbUnmapMemory(dxgk->DeviceHandle, user_va);
-
-        if (m_blob_map_user_refs == 0 && m_blob_mapped && !m_blob_kernel_va)
-        {
-            m_adapter->ctrlQueue.ResourceUnmapBlob(m_Id);
-            m_blob_mapped = false;
-            m_blob_map_info = 0;
-        }
-        ExReleaseFastMutex(&m_blob_map_mutex);
-        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     map->Process = target_process;
@@ -1334,24 +1245,14 @@ NTSTATUS VioGpuAllocation::EscapeResourceMapBlob(VIOGPU_RES_MAP_BLOB_REQ *resMap
     resMap->Size = map->Size;
     resMap->Offset = m_blob_offset;
 
-    ExReleaseFastMutex(&m_blob_map_mutex);
+    KeReleaseMutex(&m_blob_map_mutex, FALSE);
 
-    DbgPrint(TRACE_LEVEL_VERBOSE,
-             ("%s res_id=0x%x handle=0x%x m_blob_offset=0x%llx cache_type=0x%x map_len=0x%llx\n",
-              __FUNCTION__,
-              m_Id,
-              resMap->ResHandle,
-               m_blob_offset,
-              cache_type,
-              map_len));
     return STATUS_SUCCESS;
 }
 
 NTSTATUS VioGpuAllocation::EscapeResourceUnmapBlob(VIOGPU_RES_UNMAP_BLOB_REQ *resUnmap, VioGpuDevice *device)
 {
     PAGED_CODE();
-
-    DbgPrint(TRACE_LEVEL_VERBOSE, ("<---> %s res_id=0x%x\n", __FUNCTION__, m_Id));
 
     if (!resUnmap)
     {
@@ -1365,33 +1266,21 @@ NTSTATUS VioGpuAllocation::EscapeResourceUnmapBlob(VIOGPU_RES_UNMAP_BLOB_REQ *re
     HANDLE target_pid = NULL;
     VioGpuGetTargetProcess(device, &target_process, &target_pid);
 
-    ExAcquireFastMutex(&m_blob_map_mutex);
+    KeWaitForSingleObject(&m_blob_map_mutex, Executive, KernelMode, FALSE, NULL);
     BlobUserMapping *map = FindBlobMappingLocked(target_pid, target_process);
     if (!map || map->RefCount == 0)
     {
-        ExReleaseFastMutex(&m_blob_map_mutex);
+        KeReleaseMutex(&m_blob_map_mutex, FALSE);
         return STATUS_INVALID_PARAMETER;
     }
-
-    DbgPrint(TRACE_LEVEL_VERBOSE,
-             ("%s unmap pid=%p process=%p user_va=%p ref=%u size=0x%llx\n",
-              __FUNCTION__,
-              target_pid,
-              map->Process,
-              map->UserVa,
-              map->RefCount,
-              map->Size));
 
     map->RefCount--;
     m_blob_map_user_refs--;
 
     if (map->RefCount == 0)
     {
-        PVOID user_va = map->UserVa;
         RemoveEntryList(&map->ListEntry);
-        DbgPrint(TRACE_LEVEL_VERBOSE, ("%s DxgkCbUnmapMemory res_id=0x%x user_va=%p\n", __FUNCTION__, m_Id, user_va));
-        m_adapter->GetDxgkInterface()->DxgkCbUnmapMemory(
-            m_adapter->GetDxgkInterface()->DeviceHandle, user_va);
+        VioGpuUnmapBlobUserView(&map->View);
         if (map->Process)
         {
             ObDereferenceObject(map->Process);
@@ -1402,7 +1291,6 @@ NTSTATUS VioGpuAllocation::EscapeResourceUnmapBlob(VIOGPU_RES_UNMAP_BLOB_REQ *re
 
     if (m_blob_map_user_refs == 0 && m_blob_mapped && !m_blob_kernel_va)
     {
-        DbgPrint(TRACE_LEVEL_VERBOSE, ("%s ResourceUnmapBlob res_id=0x%x\n", __FUNCTION__, m_Id));
         m_adapter->ctrlQueue.ResourceUnmapBlob(m_Id);
         m_blob_mapped = false;
         m_blob_map_info = 0;
@@ -1413,7 +1301,7 @@ NTSTATUS VioGpuAllocation::EscapeResourceUnmapBlob(VIOGPU_RES_UNMAP_BLOB_REQ *re
         }
     }
 
-    ExReleaseFastMutex(&m_blob_map_mutex);
+    KeReleaseMutex(&m_blob_map_mutex, FALSE);
 
     return STATUS_SUCCESS;
 }

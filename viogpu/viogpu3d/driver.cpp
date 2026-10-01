@@ -189,11 +189,24 @@ extern "C" NTSTATUS DriverEntry(_In_ DRIVER_OBJECT *pDriverObject, _In_ UNICODE_
     InitialData.DxgkDdiControlInterrupt = VioGpu3DDdiControlInterrupt;
     InitialData.DxgkDdiGetScanLine = VioGpu3DDdiGetScanLine;
 
-    NTSTATUS Status = DxgkInitialize(pDriverObject, pRegistryPath, &InitialData);
+    NTSTATUS Status = VioGpuInitializeBlobUserViews();
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint(TRACE_LEVEL_ERROR, ("Blob user-view process notification registration failed: 0x%X\n", Status));
+        VIOGPU_TRACE_CLEANUP(NULL);
+        WPP_CLEANUP(pDriverObject);
+        g_VioGpu3DDriverObject = NULL;
+        return Status;
+    }
+    Status = DxgkInitialize(pDriverObject, pRegistryPath, &InitialData);
 
     if (!NT_SUCCESS(Status))
     {
         DbgPrint(TRACE_LEVEL_ERROR, ("DxgkInitialize failed with Status: 0x%X\n", Status));
+        VioGpuShutdownBlobUserViews();
+        VIOGPU_TRACE_CLEANUP(NULL);
+        WPP_CLEANUP(pDriverObject);
+        g_VioGpu3DDriverObject = NULL;
     }
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
@@ -213,6 +226,7 @@ VOID VioGpu3DUnload(VOID)
 {
     PAGED_CODE();
     DbgPrint(TRACE_LEVEL_INFORMATION, ("<--> %s\n", __FUNCTION__));
+    VioGpuShutdownBlobUserViews();
     VIOGPU_TRACE_CLEANUP(NULL);
     if (g_VioGpu3DDriverObject)
     {
