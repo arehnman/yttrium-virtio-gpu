@@ -19,6 +19,7 @@ PnpLockdown     = 1
 VioGpu3D_Files.Driver = 13 ; driver store
 VioGpu3D_Files.Resolution = 13 ; keep the service and its helper together
 VioGpu3D_Files.Usermode = 11 ; system32
+VioGpu3D_Files.Yttrium12 = 13,x64 ; private UMD and translator dependencies
 VioGpu3D_Files.Vulkan = 11 ; system32
 
 [SourceDisksNames]
@@ -29,7 +30,8 @@ viogpu3d.sys = 1,,f
 vgpusrv.exe = 1
 viogpuap.exe = 1
 viogpu_d3d10_x64.dll = 1,x64,
-yttrium12_x64.dll = 1,x64,
+yttrium12.dll = 1,x64,
+d3d11on12.dll = 1,x64,
 viogpu_wgl_x64.dll = 1,x64,
 libEGL_x64.dll = 1,x64,
 libGLESv1_CM_x64.dll = 1,x64,
@@ -52,12 +54,15 @@ viogpuap.exe,,,0
 
 [VioGpu3D_Files.Usermode]
 viogpu_d3d10.dll,viogpu_d3d10_x64.dll,,0
-yttrium12.dll,yttrium12_x64.dll,,0
 viogpu_wgl.dll,viogpu_wgl_x64.dll,,0
 libEGL.dll,libEGL_x64.dll,,0
 libGLESv1_CM.dll,libGLESv1_CM_x64.dll,,0
 libGLESv2.dll,libGLESv2_x64.dll,,0
 opengl32.dll,opengl32_x64.dll,,0
+[VioGpu3D_Files.Yttrium12]
+yttrium12.dll,,,0
+d3d11on12.dll,,,0
+
 [VioGpu3D_Files.Vulkan]
 libvulkan_virtio.dll,libvulkan_virtio_x64.dll,,0
 vulkan_lvp.dll,vulkan_lvp_x64.dll,,0
@@ -66,7 +71,7 @@ virtio_icd.x86_64.json,,,0
 [VioGpu3D_Inst.NT]
 Include=msdv.inf
 FeatureScore=F9
-CopyFiles=VioGpu3D_Files.Driver, VioGpu3D_Files.Resolution, VioGpu3D_Files.Usermode, VioGpu3D_Files.Vulkan
+CopyFiles=VioGpu3D_Files.Driver, VioGpu3D_Files.Resolution, VioGpu3D_Files.Usermode, VioGpu3D_Files.Yttrium12, VioGpu3D_Files.Vulkan
 AddReg=VioGpu3D_DeviceSettings
 
 [VioGpu3D_Inst.NT.Services]
@@ -100,7 +105,7 @@ HKR,, HWCursor,                    %REG_DWORD%, 0
 HKR,, FlexResolution,              %REG_DWORD%, 1
 HKR,, UsePhysicalMemory,           %REG_DWORD%, 0
 ; KMTUMDVERSION_DX12 is slot 3; preserve the existing DX9/DX10/DX11 UMDs.
-HKR,, UserModeDriverName,          %REG_MULTI_SZ%, %11%\viogpu_d3d10.dll,%11%\viogpu_d3d10.dll,%11%\viogpu_d3d10.dll,%11%\yttrium12.dll
+HKR,, UserModeDriverName,          %REG_MULTI_SZ%, %11%\viogpu_d3d10.dll,%11%\viogpu_d3d10.dll,%11%\viogpu_d3d10.dll,%13%\x64\yttrium12.dll
 HKR,, OpenGLDriverName,            %REG_MULTI_SZ%, %11%\viogpu_wgl.dll
 HKR,, OpenGLFlags,                 %REG_DWORD%, 3
 HKR,, OpenGLVersion,               %REG_DWORD%, 4096

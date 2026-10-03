@@ -468,10 +468,13 @@
   <Target Name="StageYttrium12Dll" BeforeTargets="PrepareForBuild" DependsOnTargets="UpdateInxFile" Condition="'$(Platform)' == 'x64' AND Exists('$(MESA_PREFIX_x64)\bin\viogpu_d3d10.dll')">
     <Error Condition="'$(YTTRIUM12_DLL_x64)' != '' AND !Exists('$(YTTRIUM12_DLL_x64)')" Text="Missing x64 Yttrium12 payload: $(YTTRIUM12_DLL_x64). Build yttrium12 first and set YTTRIUM12_DLL_x64." />
     <MakeDir Condition="'$(YTTRIUM12_DLL_x64)' != ''" Directories="$(MesaStageDir)x64" />
-    <Copy Condition="'$(YTTRIUM12_DLL_x64)' != ''" SourceFiles="$(YTTRIUM12_DLL_x64)" DestinationFiles="$(MesaStageDir)x64\yttrium12_x64.dll" />
-    <Delete Condition="'$(YTTRIUM12_DLL_x64)' == ''" Files="$(MesaStageDir)x64\yttrium12_x64.dll" />
+    <Copy Condition="'$(YTTRIUM12_DLL_x64)' != ''" SourceFiles="$(YTTRIUM12_DLL_x64)" DestinationFiles="$(MesaStageDir)x64\yttrium12.dll" />
+    <Delete Condition="'$(YTTRIUM12_DLL_x64)' == ''" Files="$(MesaStageDir)x64\yttrium12.dll" />
+    <Copy Condition="'$(YTTRIUM12_ON12_DLL_x64)' != ''" SourceFiles="$(YTTRIUM12_ON12_DLL_x64)" DestinationFiles="$(MesaStageDir)x64\d3d11on12.dll" />
+    <Delete Condition="'$(YTTRIUM12_ON12_DLL_x64)' == ''" Files="$(MesaStageDir)x64\d3d11on12.dll" />
     <!-- WDK packaging copies incrementally, so remove a previous opt-in payload. -->
-    <Delete Condition="'$(YTTRIUM12_DLL_x64)' == '' AND '$(PackageDir)' != ''" Files="$(PackageDir)x64\yttrium12_x64.dll" />
+    <Delete Condition="'$(YTTRIUM12_DLL_x64)' == '' AND '$(PackageDir)' != ''" Files="$(PackageDir)x64\yttrium12.dll" />
+    <Delete Condition="'$(YTTRIUM12_ON12_DLL_x64)' == '' AND '$(PackageDir)' != ''" Files="$(PackageDir)x64\d3d11on12.dll" />
   </Target>
   <Target Name="StageMesaDlls" BeforeTargets="PrepareForBuild">
     <MakeDir Condition="Exists('$(MESA_PREFIX_x64)\bin\viogpu_d3d10.dll')" Directories="$(MesaStageDir)x64" />
@@ -517,7 +520,10 @@
     <FilesToPackage Include="$(MesaStageDir)x64\viogpu_d3d10_x64.dll">
       <PackageRelativeDirectory>x64</PackageRelativeDirectory>
     </FilesToPackage>
-    <FilesToPackage Condition="'$(YTTRIUM12_DLL_x64)' != ''" Include="$(MesaStageDir)x64\yttrium12_x64.dll">
+    <FilesToPackage Condition="'$(YTTRIUM12_DLL_x64)' != ''" Include="$(MesaStageDir)x64\yttrium12.dll">
+      <PackageRelativeDirectory>x64</PackageRelativeDirectory>
+    </FilesToPackage>
+    <FilesToPackage Condition="'$(YTTRIUM12_ON12_DLL_x64)' != ''" Include="$(MesaStageDir)x64\d3d11on12.dll">
       <PackageRelativeDirectory>x64</PackageRelativeDirectory>
     </FilesToPackage>
     <FilesToPackage Include="$(MesaStageDir)x64\viogpu_wgl_x64.dll">
@@ -623,7 +629,8 @@
   </ItemGroup>
   <ItemGroup Condition="'$(Platform)' == 'x64' AND Exists('$(MESA_PREFIX_x64)\bin\viogpu_d3d10.dll')">
     <PackOne_Files Include="$(MesaStageDir)x64\viogpu_d3d10_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
-    <PackOne_Files Condition="'$(YTTRIUM12_DLL_x64)' != ''" Include="$(MesaStageDir)x64\yttrium12_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
+    <PackOne_Files Condition="'$(YTTRIUM12_DLL_x64)' != ''" Include="$(MesaStageDir)x64\yttrium12.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
+    <PackOne_Files Condition="'$(YTTRIUM12_ON12_DLL_x64)' != ''" Include="$(MesaStageDir)x64\d3d11on12.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)x64\viogpu_wgl_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)x64\libEGL_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
     <PackOne_Files Include="$(MesaStageDir)x64\libGLESv1_CM_x64.dll"><PackOne_Subdir>x64</PackOne_Subdir></PackOne_Files>
@@ -679,7 +686,7 @@
       <TargetInxFiles Condition="'$(Platform)' == 'ARM64' AND Exists('$(MESA_PREFIX_ARM64)\bin\viogpu_d3d10.dll') AND !Exists('$(MESA_PREFIX_x86)\bin\viogpu_d3d10.dll')" Include="$(ProjectDir)viogpu3d_arm64.inx" />
       <TargetInxFiles Condition="'$(Platform)' == 'Win32'" Include="$(ProjectDir)viogpu3d_x86.inx" />
     </ItemGroup>
-    <Exec Command="%25SystemRoot%25\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)tools\prepare_package_inx.ps1&quot; -SourcePath &quot;@(TargetInxFiles)&quot; -DestinationPath &quot;$(ProjectDir)viogpu3d.inx&quot; -NativeLvpPath &quot;$(NativeLvpPath)&quot; -Wow64LvpPath &quot;$(Wow64LvpPath)&quot; -Yttrium12Path &quot;$(YTTRIUM12_DLL_x64)&quot;" />
+    <Exec Command="%25SystemRoot%25\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)tools\prepare_package_inx.ps1&quot; -SourcePath &quot;@(TargetInxFiles)&quot; -DestinationPath &quot;$(ProjectDir)viogpu3d.inx&quot; -NativeLvpPath &quot;$(NativeLvpPath)&quot; -Wow64LvpPath &quot;$(Wow64LvpPath)&quot; -Yttrium12Path &quot;$(YTTRIUM12_DLL_x64)&quot; -On12Path &quot;$(YTTRIUM12_ON12_DLL_x64)&quot;" />
   </Target>
   <Target Name="NormalizePackOneInf" BeforeTargets="PackOneTarget">
     <Copy SourceFiles="$(OutDir)viogpu3d_arm64.inf"
