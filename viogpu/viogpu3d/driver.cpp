@@ -1386,9 +1386,7 @@ NTSTATUS VioGpu3DSetVidPnSourceAddress(_In_ CONST HANDLE hAdapter,
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<---> %s\n", __FUNCTION__));
 
     VioGpuAdapter *pAdapter = reinterpret_cast<VioGpuAdapter *>(hAdapter);
-    pAdapter->vidpn.SetVidPnSourceAddress(pSetVidPnSourceAddress);
-
-    return STATUS_SUCCESS;
+    return pAdapter->vidpn.SetVidPnSourceAddress(pSetVidPnSourceAddress);
 }
 
 VOID VioGpu3DResetDevice(_In_ VOID *pDeviceContext)

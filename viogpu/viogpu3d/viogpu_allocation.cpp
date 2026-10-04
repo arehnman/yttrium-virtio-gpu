@@ -967,6 +967,28 @@ NTSTATUS VioGpuAllocation::EscapeResourceInfo(VIOGPU_RES_INFO_REQ *resInfo)
     return STATUS_SUCCESS;
 }
 
+bool VioGpuAllocation::SupportsDirectFlip() const
+{
+    /* SET_SCANOUT_BLOB supplies the layout on every flip. HOST3D storage is
+     * pinned by the allocation's lifetime; its VidMm aperture address is
+     * bookkeeping, not CPU backing. Only exported single-plane primaries
+     * with a complete linear scanout footprint qualify. */
+    if (!m_is_blob || !m_valid || m_blob_mem != VIRTIO_GPU_BLOB_MEM_HOST3D ||
+        !(m_blob_flags & VIRTIO_GPU_BLOB_FLAG_USE_SHAREABLE) ||
+        !(m_options.bind & VIRGL_BIND_DISPLAY_TARGET) ||
+        !VioGpuVirglFormatToScanout(m_options.format) ||
+        m_options.target != 2 || !m_options.width || !m_options.height ||
+        m_options.depth != 1 || m_options.array_size != 1 || m_options.last_level ||
+        m_options.nr_samples > 1)
+        return false;
+
+    const ULONG stride = GetStride();
+    const ULONGLONG rowBytes = (ULONGLONG)m_options.width * 4;
+    const ULONGLONG end = (ULONGLONG)m_scanout_offset +
+        (ULONGLONG)stride * (m_options.height - 1) + rowBytes;
+    return stride >= rowBytes && !(stride & 3) && !(m_scanout_offset & 3) && end <= m_blob_size;
+}
+
 NTSTATUS VioGpuAllocation::EscapeResourceBusy(VIOGPU_RES_BUSY_REQ *resBusy)
 {
     PAGED_CODE();

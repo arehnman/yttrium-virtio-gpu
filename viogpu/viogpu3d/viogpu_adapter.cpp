@@ -903,7 +903,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                          * from the per-allocation flags, not from here. */
                         pSegmentDesc[1].Flags.CacheCoherent = FALSE;
                         pSegmentDesc[1].Flags.CpuVisible = TRUE;
-                        pSegmentDesc[1].Flags.DirectFlip = FALSE;
+                        pSegmentDesc[1].Flags.DirectFlip = TRUE;
 
                         PHYSICAL_ADDRESS shmem_pa = shmem_bar->GetPA();
                         shmem_pa.QuadPart += m_VioDev.shmem_offset;
@@ -1038,7 +1038,7 @@ NTSTATUS VioGpuAdapter::QueryAdapterInfo(_In_ CONST DXGKARG_QUERYADAPTERINFO *pQ
                     pSeg1->Flags.Aperture = TRUE;
                     pSeg1->Flags.CacheCoherent = FALSE;
                     pSeg1->Flags.CpuVisible = TRUE;
-                    pSeg1->Flags.DirectFlip = FALSE;
+                    pSeg1->Flags.DirectFlip = TRUE;
                     pSeg1->CpuTranslatedAddress = shmem_pa;
                     pSeg1->Size = (SIZE_T)shmem_len;
                     pSeg1->CommitLimit = (SIZE_T)shmem_len;
@@ -1461,6 +1461,30 @@ NTSTATUS VioGpuAdapter::Escape(_In_ CONST DXGKARG_ESCAPE *pEscape)
                 status = VioGpuCopyCapsetToUser(userCapset, buf, to_copy);
                 ctrlQueue.ReleaseBuffer(vbuf);
 
+                break;
+            }
+        case VIOGPU_CHECK_DIRECT_FLIP:
+            {
+                if (pVioGpuEscape->DataLength < sizeof(VIOGPU_CHECK_DIRECT_FLIP_REQ))
+                    return STATUS_INVALID_BUFFER_SIZE;
+                VIOGPU_CHECK_DIRECT_FLIP_REQ *query = &pVioGpuEscape->CheckDirectFlip;
+                query->Supported = FALSE;
+                /* Scanout changes are currently applied on our vsync timer.
+                 * Do not promise immediate flipping (or unknown flags). */
+                if (query->Flags)
+                    break;
+                VioGpuAllocationReference appReference(this, query->ApplicationAllocation);
+                VioGpuAllocationReference desktopReference(this, query->DesktopAllocation);
+                VioGpuAllocation *app = appReference.Get();
+                VioGpuAllocation *desktop = desktopReference.Get();
+                if (!app || !desktop)
+                    return STATUS_INVALID_PARAMETER;
+                /* This adapter exposes only VidPn source 0. Each scanout
+                 * command carries its own format and pitch, so the two
+                 * compatible 32-bit color formats need not be identical. */
+                query->Supported = app->SupportsDirectFlip() && desktop->SupportsDirectFlip() &&
+                    app->GetWidth() == desktop->GetWidth() &&
+                    app->GetHeight() == desktop->GetHeight();
                 break;
             }
         case VIOGPU_RES_INFO:

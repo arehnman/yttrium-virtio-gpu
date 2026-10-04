@@ -44,6 +44,7 @@ class VioGpuAllocation
         return m_options.format;
     }
     UINT GetStride(void) const;
+    bool SupportsDirectFlip() const;
     UINT GetScanoutOffset(void) const
     {
         return m_scanout_offset;
