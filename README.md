@@ -66,7 +66,8 @@ multisampling, compute workloads, texture compression, and stream output.
 The Yttrium graphics driver require a virglrenderer with venus and blob support together with a late version QEMU. The Flatpak build packages the matching
 QEMU 11.1.0 and virglrenderer 1.3.0 revisions together. QEMU also carries a small patch that
 prevents its display path from blocking the Windows guest when the display
-window is hidden or minimized. It should work on distro packaged QEMU and virglrenderer providing they are new enough and built with the required options.
+window is hidden or minimized. On Intel and AMD hosts, it should work with distro-packaged QEMU and
+virglrenderer if they are recent enough and built with the required options.
 
 ## Project status
 
@@ -134,6 +135,12 @@ It provides the `vulkan-1.dll` loader and the `vulkaninfo` utility.
 
 ## Linux host setup
 
+**NVIDIA hosts require the Yttrium QEMU Flatpak for this release.** It
+includes the host display fixes needed for NVIDIA GPUs; an unpatched
+QEMU/virglrenderer stack will likely leave the guest display black.
+
+**On NVIDIA hosts, use QEMU’s GTK display for the simplest setup.** Local SPICE GL display requires a viewer using spice-gtk 0.43 or newer, older versions can produce a black display. This requirement concerns the spice-gtk library, not the remote-viewer version number. Egl-headless is currently unsupported on NVIDIA hosts with this QEMU build.
+
 The recommended alpha configuration uses the Yttrium Flatpak so that QEMU and
 virglrenderer remain at compatible revisions. Download
 `org.qemu.yttrium.flatpak` from the
@@ -154,7 +161,7 @@ The optional `org.qemu.yttrium.Debug.flatpak` release asset contains host debug
 symbols. Developers who want to build the host stack can use the
 [Flatpak source repository](https://github.com/arehnman/yttrium-qemu-flatpak).
 
-Recent official QEMU builds can also run Yttrium.
+On Intel and AMD hosts, recent official QEMU builds can also run Yttrium.
 Unlike the Yttrium Flatpak, official QEMU builds do not include the display
 progress patch. An invisible, hidden, or minimized display window may therefore
 stall the guest; keep the display visible while running graphics workloads.
