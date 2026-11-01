@@ -129,9 +129,9 @@ HKR, "Interrupt Management\MessageSignaledInterruptProperties", MessageNumberLim
 [Strings]
 
 ;  *******Localizable Strings*******
-diskId1 = "Hardsoft VirtIO GPU controller Installation Disk"
-VioGpu3D.DeviceDesc = "Hardsoft VirtIO GPU 3D controller"
-VioGpu3D.ResolutionServiceDesc = "VioGpu Resolution Service"
+diskId1 = "Yttrium VirtIO GPU controller Installation Disk"
+VioGpu3D.DeviceDesc = "Yttrium VirtIO GPU 3D controller"
+VioGpu3D.ResolutionServiceDesc = "Yttrium VirtIO Resolution Service"
 HARDSOFT = "Hardsoft Swed."
 
 ;  *******Non Localizable Strings*******
